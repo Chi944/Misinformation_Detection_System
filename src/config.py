@@ -1,0 +1,45 @@
+"""
+Configuration settings for the misinformation detection system.
+"""
+
+import os
+from pathlib import Path
+
+# Project paths
+PROJECT_ROOT = Path(__file__).parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
+RAW_DATA_DIR = DATA_DIR / "raw"
+PROCESSED_DATA_DIR = DATA_DIR / "processed"
+MODELS_DIR = PROJECT_ROOT / "models"
+RESULTS_DIR = PROJECT_ROOT / "results"
+
+# Create directories if they don't exist
+for dir_path in [DATA_DIR, RAW_DATA_DIR, PROCESSED_DATA_DIR, MODELS_DIR, RESULTS_DIR]:
+    dir_path.mkdir(parents=True, exist_ok=True)
+
+# Model settings
+MAX_SEQUENCE_LENGTH = 512
+BATCH_SIZE = 16
+LEARNING_RATE = 2e-5
+NUM_EPOCHS = 3
+RANDOM_SEED = 42
+
+# BERT model configuration
+BERT_MODEL_NAME = "distilbert-base-uncased"  # Using DistilBERT for latency optimization
+
+# Traditional ML settings
+TFIDF_MAX_FEATURES = 10000
+NGRAM_RANGE = (1, 2)
+
+# Evaluation settings
+TEST_SIZE = 0.1
+VAL_SIZE = 0.1
+TRAIN_SIZE = 0.8
+
+# Inference constraints
+MAX_INFERENCE_LATENCY_MS = 500
+
+# Labels
+LABEL_CREDIBLE = 0
+LABEL_MISINFORMATION = 1
+LABEL_NAMES = {0: "Credible", 1: "Misinformation"}

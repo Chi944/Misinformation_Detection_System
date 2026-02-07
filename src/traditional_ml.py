@@ -21,7 +21,8 @@ from sklearn.metrics import (
 )
 
 from src.config import (
-    MODELS_DIR, TFIDF_MAX_FEATURES, NGRAM_RANGE, 
+    MODELS_DIR, TFIDF_MAX_FEATURES, NGRAM_RANGE,
+    TFIDF_MIN_DF, TFIDF_MAX_DF, LR_MAX_ITER,
     RANDOM_SEED, LABEL_NAMES
 )
 
@@ -148,20 +149,21 @@ class NaiveBayesClassifier(TraditionalMLClassifier):
             ('vectorizer', CountVectorizer(
                 max_features=self.max_features,
                 ngram_range=self.ngram_range,
-                stop_words='english'
+                stop_words='english',
+                min_df=TFIDF_MIN_DF,
+                max_df=TFIDF_MAX_DF
             )),
-            ('classifier', MultinomialNB())
+            ('classifier', MultinomialNB(alpha=0.5))
         ])
         
         if tune_hyperparams:
             param_grid = {
-                'vectorizer__max_features': [5000, 10000, 20000],
-                'vectorizer__ngram_range': [(1, 1), (1, 2), (1, 3)],
-                'classifier__alpha': [0.1, 0.5, 1.0]
+                'vectorizer__max_features': [15000, 25000, 35000],
+                'vectorizer__ngram_range': [(1, 2), (1, 3)],
+                'classifier__alpha': [0.1, 0.5, 1.0, 2.0]
             }
-            
             grid_search = GridSearchCV(
-                self.pipeline, param_grid, cv=3, scoring='f1_macro', n_jobs=-1
+                self.pipeline, param_grid, cv=5, scoring='f1_macro', n_jobs=-1, verbose=0
             )
             grid_search.fit(X, y)
             self.pipeline = grid_search.best_estimator_
@@ -200,25 +202,28 @@ class TfidfLogisticClassifier(TraditionalMLClassifier):
                 max_features=self.max_features,
                 ngram_range=self.ngram_range,
                 stop_words='english',
-                sublinear_tf=True
+                sublinear_tf=True,
+                min_df=TFIDF_MIN_DF,
+                max_df=TFIDF_MAX_DF
             )),
             ('classifier', LogisticRegression(
                 random_state=RANDOM_SEED,
-                max_iter=1000,
-                class_weight='balanced'
+                max_iter=LR_MAX_ITER,
+                class_weight='balanced',
+                C=1.0,
+                solver='lbfgs'
             ))
         ])
         
         if tune_hyperparams:
             param_grid = {
-                'vectorizer__max_features': [5000, 10000, 20000],
-                'vectorizer__ngram_range': [(1, 1), (1, 2), (1, 3)],
-                'classifier__C': [0.1, 1.0, 10.0],
+                'vectorizer__max_features': [15000, 25000, 35000],
+                'vectorizer__ngram_range': [(1, 2), (1, 3)],
+                'classifier__C': [0.5, 1.0, 2.0, 5.0],
                 'classifier__penalty': ['l2']
             }
-            
             grid_search = GridSearchCV(
-                self.pipeline, param_grid, cv=3, scoring='f1_macro', n_jobs=-1
+                self.pipeline, param_grid, cv=5, scoring='f1_macro', n_jobs=-1, verbose=0
             )
             grid_search.fit(X, y)
             self.pipeline = grid_search.best_estimator_

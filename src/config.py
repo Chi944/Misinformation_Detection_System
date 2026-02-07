@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 # Project paths
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
@@ -27,9 +27,12 @@ RANDOM_SEED = 42
 # BERT model configuration
 BERT_MODEL_NAME = "distilbert-base-uncased"  # Using DistilBERT for latency optimization
 
-# Traditional ML settings
-TFIDF_MAX_FEATURES = 10000
-NGRAM_RANGE = (1, 2)
+# Traditional ML settings (tuned for higher accuracy)
+TFIDF_MAX_FEATURES = 25000
+NGRAM_RANGE = (1, 3)
+TFIDF_MIN_DF = 2
+TFIDF_MAX_DF = 0.95
+LR_MAX_ITER = 2000
 
 # Evaluation settings
 TEST_SIZE = 0.1

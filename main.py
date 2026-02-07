@@ -180,6 +180,7 @@ def main():
         epilog="""
 Examples:
   python main.py --train                    Train traditional ML models
+  python main.py --train --tune             Train with hyperparameter tuning (best accuracy)
   python main.py --train --train-bert       Train all models including BERT
   python main.py --evaluate                 Evaluate trained models
   python main.py --demo                     Run inference demo

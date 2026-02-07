@@ -1,0 +1,22 @@
+# Dependencies
+node_modules
+.venv-py38
+venv
+__pycache__
+*.pyc
+.pytest_cache
+
+# Build / cache
+.next
+.vite
+dist
+build
+*.egg-info
+
+# Environment
+.env
+.env.local
+
+# IDE
+.idea
+.vscode

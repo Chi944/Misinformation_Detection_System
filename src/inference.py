@@ -126,8 +126,8 @@ class InferenceEngine:
             explanation = explainer.explain_with_lime(
                 text,
                 lambda x: model.predict_proba(pd.Series(x)),
-                num_features=10,
-                num_samples=100
+                num_features=15,
+                num_samples=200
             )
             result['explanation'] = {
                 'top_features': explanation['feature_weights']

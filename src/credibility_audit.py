@@ -1,12 +1,16 @@
 """
 Comprehensive credibility audit module.
-Computes: Sensationalism, Political Bias, Source Credibility,
-Factuality Index, and Flagged Terms.
+Computes: Sensationalism, Political Bias, Source Credibility (NewsGuard-style DB),
+Factuality Index, Flagged Terms, and Lexical Diversity (vocabulary richness, language complexity).
 """
 
+import json
 import re
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse
+
+from src.config import DATA_DIR
 
 # Sensational / clickbait-style terms (push toward misinformation)
 SENSATIONAL_WORDS = {
@@ -30,6 +34,65 @@ TRUSTED_DOMAINS = {
 UNTRUSTED_DOMAINS = {
     "blogspot.com", "wordpress.com", "tumblr.com",  # generic blogs
 }
+
+# NewsGuard-style domain reputation database (loaded from data/domain_reputation.json)
+_domain_reputation_db: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+def _load_domain_reputation_db() -> Dict[str, Dict[str, Any]]:
+    """Load NewsGuard-style domain reputation database for scoring."""
+    global _domain_reputation_db
+    if _domain_reputation_db is not None:
+        return _domain_reputation_db
+    path = DATA_DIR / "domain_reputation.json"
+    if not path.exists():
+        _domain_reputation_db = {}
+        return _domain_reputation_db
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            _domain_reputation_db = json.load(f)
+    except Exception:
+        _domain_reputation_db = {}
+    return _domain_reputation_db
+
+
+def compute_lexical_diversity(text: str) -> Dict[str, Any]:
+    """
+    Lexical diversity analysis: vocabulary richness and language complexity metrics.
+    Returns type-token ratio (TTR), unique/total word counts, avg word length, avg sentence length.
+    """
+    if not text or not str(text).strip():
+        return {
+            "type_token_ratio": 0.0,
+            "unique_words": 0,
+            "total_words": 0,
+            "avg_word_length": 0.0,
+            "avg_sentence_length": 0.0,
+            "sentence_count": 0,
+        }
+    t = str(text).strip()
+    words = re.findall(r"\w+", t.lower())
+    total_words = len(words)
+    unique_words = len(set(words))
+    type_token_ratio = round(unique_words / total_words, 4) if total_words else 0.0
+    # Average word length (characters)
+    char_count = sum(len(w) for w in words)
+    avg_word_length = round(char_count / total_words, 2) if total_words else 0.0
+    # Sentences: split on . ! ?
+    sentences = [s.strip() for s in re.split(r"[.!?]+", t) if s.strip()]
+    sentence_count = len(sentences)
+    sentence_lengths = [len(re.findall(r"\w+", s)) for s in sentences]
+    avg_sentence_length = (
+        round(sum(sentence_lengths) / sentence_count, 2) if sentence_count else 0.0
+    )
+    return {
+        "type_token_ratio": type_token_ratio,
+        "unique_words": unique_words,
+        "total_words": total_words,
+        "avg_word_length": avg_word_length,
+        "avg_sentence_length": avg_sentence_length,
+        "sentence_count": sentence_count,
+    }
 
 
 def compute_sensationalism(text: str) -> float:
@@ -95,8 +158,8 @@ def compute_political_bias(text: str) -> Dict[str, Any]:
 
 def compute_source_credibility(url: Optional[str]) -> Optional[Dict[str, Any]]:
     """
-    Estimate source credibility 0–1 when URL is provided.
-    Uses domain trust lists.
+    NewsGuard-style source credibility: domain reputation scoring via database lookup.
+    Loads data/domain_reputation.json for domain -> score/tier; falls back to TRUSTED/UNTRUSTED lists.
     """
     if not url or not str(url).strip():
         return None
@@ -105,21 +168,32 @@ def compute_source_credibility(url: Optional[str]) -> Optional[Dict[str, Any]]:
         host = (parsed.netloc or parsed.path or "").lower()
         if not host:
             return None
-        # Normalize: strip www, take main domain
         host = re.sub(r"^www\.", "", host)
         parts = host.split(".")
         domain = ".".join(parts[-2:]) if len(parts) >= 2 else host
 
-        score = 0.5  # default unknown
+        db = _load_domain_reputation_db()
+        # Lookup: try full host then base domain
+        for key in (host, domain):
+            if key in db:
+                entry = db[key]
+                return {
+                    "score": round(float(entry.get("score", 0.5)), 4),
+                    "domain": host,
+                    "tier": entry.get("tier", "unknown"),
+                    "source": "reputation_db",
+                }
+        # Fallback to list-based scoring
+        score = 0.5
         if any(d in host or domain.endswith(d) for d in TRUSTED_DOMAINS):
             score = 0.9
         elif any(d in host or domain.endswith(d) for d in UNTRUSTED_DOMAINS):
             score = 0.3
-
         return {
             "score": round(score, 4),
             "domain": host,
             "tier": "trusted" if score >= 0.8 else "unknown" if score >= 0.5 else "caution",
+            "source": "list",
         }
     except Exception:
         return None
@@ -197,9 +271,8 @@ def run_credibility_audit(
         sensational_words=True,
         predicted_label=predicted_label,
     )
+    lexical_diversity = compute_lexical_diversity(text)
 
-    # Always return the same 5 metrics for all input methods (text, URL, etc.)
-    # When no URL, source_credibility is present with N/A placeholder
     audit = {
         "sensationalism": sensationalism,
         "political_bias": political_bias,
@@ -210,5 +283,6 @@ def run_credibility_audit(
         },
         "factuality_index": factuality,
         "flagged_terms": flagged_terms,
+        "lexical_diversity": lexical_diversity,
     }
     return audit

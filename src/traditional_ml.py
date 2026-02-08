@@ -309,6 +309,40 @@ class MajorityClassifier:
         }
 
 
+def train_single_model(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    text_column: str = 'combined_text',
+    label_column: str = 'label',
+    tune_hyperparams: bool = False,
+) -> Dict[str, Any]:
+    """
+    Train only the TF-IDF + Logistic Regression model (single model).
+    Saves to models/tfidf_logistic.pkl.
+    """
+    X_train = train_df[text_column]
+    y_train = train_df[label_column]
+    X_val = val_df[text_column]
+    y_val = val_df[label_column]
+    print("\n=== Training TF-IDF + Logistic Regression (single model) ===")
+    tfidf_lr = TfidfLogisticClassifier()
+    tfidf_lr.fit(X_train, y_train, tune_hyperparams=tune_hyperparams)
+    metrics = tfidf_lr.evaluate(X_val, y_val)
+    latency = tfidf_lr.measure_inference_latency(X_val)
+    print(f"F1: {metrics['f1_score']:.4f}, Mean latency: {latency['mean_latency_ms']:.2f}ms")
+    fi = tfidf_lr.get_feature_importance()
+    print("Top features for Misinformation:", fi['misinformation_features'][:5].tolist())
+    print("Top features for Credible:", fi['credible_features'][:5].tolist())
+    tfidf_lr.save()
+    return {
+        'tfidf_logistic': {
+            'model': tfidf_lr,
+            'metrics': metrics,
+            'latency': latency,
+        }
+    }
+
+
 def train_traditional_baselines(train_df: pd.DataFrame, 
                                 val_df: pd.DataFrame,
                                 text_column: str = 'combined_text',

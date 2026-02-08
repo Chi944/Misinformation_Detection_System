@@ -12,116 +12,53 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 
-def train_models(train_bert: bool = False, tune_hyperparams: bool = False):
-    """Train all models."""
+def train_models(tune_hyperparams: bool = False):
+    """Train the single TF-IDF + Logistic Regression model."""
     print("=" * 60)
-    print("MISINFORMATION DETECTION - MODEL TRAINING")
+    print("MISINFORMATION DETECTION - MODEL TRAINING (SINGLE MODEL)")
     print("=" * 60)
-    
     from src.data_preprocessing import prepare_data
-    from src.traditional_ml import train_traditional_baselines
-    
-    print("\n[1/3] Preparing data...")
+    from src.traditional_ml import train_single_model
+    print("\n[1/2] Preparing data...")
     train_df, val_df, test_df = prepare_data()
-    
-    print("\n[2/3] Training traditional ML baselines...")
-    traditional_results = train_traditional_baselines(
-        train_df, val_df, 
-        tune_hyperparams=tune_hyperparams
-    )
-    
-    bert_results = None
-    if train_bert:
-        print("\n[3/3] Training BERT model...")
-        from src.deep_learning import train_bert_model
-        bert_results = train_bert_model(train_df, val_df, num_epochs=3, batch_size=8)
-    else:
-        print("\n[3/3] Skipping BERT training (use --train-bert to enable)")
-    
+    print("\n[2/2] Training TF-IDF + Logistic Regression...")
+    results = train_single_model(train_df, val_df, tune_hyperparams=tune_hyperparams)
     print("\n" + "=" * 60)
     print("TRAINING COMPLETE")
     print("=" * 60)
-    
-    return traditional_results, bert_results, test_df
+    return results, test_df
 
 
 def evaluate_models(test_df=None):
-    """Evaluate all trained models."""
+    """Evaluate the single trained model (TF-IDF + LR)."""
     print("=" * 60)
     print("MISINFORMATION DETECTION - MODEL EVALUATION")
     print("=" * 60)
-    
     if test_df is None:
         from src.data_preprocessing import prepare_data
         _, _, test_df = prepare_data()
-    
     from src.evaluation import ModelEvaluator
-    from src.traditional_ml import NaiveBayesClassifier, TfidfLogisticClassifier
+    from src.traditional_ml import TfidfLogisticClassifier
     from src.config import MODELS_DIR
-    
     evaluator = ModelEvaluator()
-    models = {}
-    
-    # Load and evaluate Naive Bayes
-    nb_path = MODELS_DIR / 'naive_bayes.pkl'
-    if nb_path.exists():
-        print("\nEvaluating Naive Bayes...")
-        nb = NaiveBayesClassifier()
-        nb.load(nb_path)
-        
-        y_pred = nb.predict(test_df['combined_text'])
-        y_proba = nb.predict_proba(test_df['combined_text'])[:, 1]
-        latency = nb.measure_inference_latency(test_df['combined_text'])
-        
-        evaluator.evaluate_model('Naive Bayes', test_df['label'].values, y_pred, y_proba, latency)
-        models['Naive Bayes'] = {'model': nb, 'latency': latency}
-    
-    # Load and evaluate TF-IDF + Logistic Regression
     tfidf_path = MODELS_DIR / 'tfidf_logistic.pkl'
-    if tfidf_path.exists():
-        print("\nEvaluating TF-IDF + Logistic Regression...")
-        tfidf_lr = TfidfLogisticClassifier()
-        tfidf_lr.load(tfidf_path)
-        
-        y_pred = tfidf_lr.predict(test_df['combined_text'])
-        y_proba = tfidf_lr.predict_proba(test_df['combined_text'])[:, 1]
-        latency = tfidf_lr.measure_inference_latency(test_df['combined_text'])
-        
-        evaluator.evaluate_model('TF-IDF + LR', test_df['label'].values, y_pred, y_proba, latency)
-        models['TF-IDF + LR'] = {'model': tfidf_lr, 'latency': latency}
-    
-    # Load and evaluate BERT
-    bert_path = MODELS_DIR / 'bert_model'
-    if bert_path.exists():
-        print("\nEvaluating BERT model...")
-        from src.deep_learning import BertClassifier
-        bert = BertClassifier()
-        bert.load(bert_path)
-        
-        y_pred, y_proba_full = bert.predict_batch(test_df['combined_text'].tolist())
-        y_proba = y_proba_full[:, 1]
-        latency = bert.measure_inference_latency(test_df['combined_text'].tolist())
-        
-        evaluator.evaluate_model('DistilBERT', test_df['label'].values, y_pred, y_proba, latency)
-        models['DistilBERT'] = {'model': bert, 'latency': latency}
-    
-    if not models:
-        print("\nNo trained models found. Run training first.")
+    if not tfidf_path.exists():
+        print("\nNo trained model found. Run: python main.py --train")
         return None
-    
-    # Generate visualizations and report
+    print("\nEvaluating TF-IDF + Logistic Regression...")
+    tfidf_lr = TfidfLogisticClassifier()
+    tfidf_lr.load(tfidf_path)
+    y_pred = tfidf_lr.predict(test_df['combined_text'])
+    y_proba = tfidf_lr.predict_proba(test_df['combined_text'])[:, 1]
+    latency = tfidf_lr.measure_inference_latency(test_df['combined_text'])
+    evaluator.evaluate_model('TF-IDF + LR', test_df['label'].values, y_pred, y_proba, latency)
     print("\nGenerating evaluation visualizations...")
     evaluator.plot_metrics_comparison()
     evaluator.plot_latency_comparison()
-    
-    for model_name in models.keys():
-        evaluator.plot_confusion_matrix(model_name)
-    
+    evaluator.plot_confusion_matrix('TF-IDF + LR')
     report = evaluator.generate_report()
     evaluator.save_results()
-    
     print("\n" + report)
-    
     return evaluator
 
 
@@ -179,10 +116,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py --train                    Train traditional ML models
-  python main.py --train --tune             Train with hyperparameter tuning (best accuracy)
-  python main.py --train --train-bert       Train all models including BERT
-  python main.py --evaluate                 Evaluate trained models
+  python main.py --train                    Train TF-IDF + LR model
+  python main.py --train --tune             Train with hyperparameter tuning
+  python main.py --evaluate                 Evaluate trained model
   python main.py --demo                     Run inference demo
   python main.py --api                      Start API server
   python main.py --all                      Train, evaluate, and run demo
@@ -190,9 +126,7 @@ Examples:
     )
     
     parser.add_argument('--train', action='store_true',
-                        help='Train models')
-    parser.add_argument('--train-bert', action='store_true',
-                        help='Include BERT in training (requires GPU for speed)')
+                        help='Train the single TF-IDF + LR model')
     parser.add_argument('--tune', action='store_true',
                         help='Tune hyperparameters during training')
     parser.add_argument('--evaluate', action='store_true',
@@ -216,10 +150,7 @@ Examples:
     test_df = None
     
     if args.all or args.train:
-        _, _, test_df = train_models(
-            train_bert=args.train_bert,
-            tune_hyperparams=args.tune
-        )
+        _, test_df = train_models(tune_hyperparams=args.tune)
     
     if args.all or args.evaluate:
         evaluate_models(test_df)

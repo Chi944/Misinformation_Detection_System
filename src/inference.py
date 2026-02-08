@@ -26,82 +26,39 @@ _models: Dict[str, Any] = {}
 
 
 def load_models():
-    """Load all trained models for inference."""
+    """Load the single TF-IDF + Logistic Regression model for inference."""
     global _models
-    
-    # Try to load TF-IDF + Logistic Regression model
+    _models = {}
     tfidf_path = MODELS_DIR / 'tfidf_logistic.pkl'
     if tfidf_path.exists():
         from src.traditional_ml import TfidfLogisticClassifier
         model = TfidfLogisticClassifier()
         model.load(tfidf_path)
         _models['tfidf_logistic'] = model
-        print(f"Loaded TF-IDF + Logistic Regression model")
-    
-    # Try to load Naive Bayes model
-    nb_path = MODELS_DIR / 'naive_bayes.pkl'
-    if nb_path.exists():
-        from src.traditional_ml import NaiveBayesClassifier
-        model = NaiveBayesClassifier()
-        model.load(nb_path)
-        _models['naive_bayes'] = model
-        print(f"Loaded Naive Bayes model")
-    
-    # Try to load BERT model
-    bert_path = MODELS_DIR / 'bert_model'
-    if bert_path.exists():
-        try:
-            from src.deep_learning import BertClassifier
-            model = BertClassifier()
-            model.load(bert_path)
-            _models['bert'] = model
-            print(f"Loaded BERT model")
-        except Exception as e:
-            print(f"Warning: Could not load BERT model: {e}")
-    
-    if not _models:
-        print("Warning: No models found. Train models first.")
-    
+        print("Loaded TF-IDF + Logistic Regression model")
+    else:
+        print("Warning: No model found. Train with: python main.py --train")
     return _models
 
 
 class InferenceEngine:
-    """Unified inference engine for all models."""
+    """Inference engine using the single TF-IDF + Logistic Regression model."""
     
     def __init__(self, models: Dict[str, Any] = None):
         self.models = models or _models
         self.default_model = 'tfidf_logistic'
-    
+
     def predict(self, text: str, model_name: Optional[str] = None,
                 include_explanation: bool = False, url: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Make a prediction on input text.
-        
-        Args:
-            text: Input text to classify
-            model_name: Name of the model to use
-            include_explanation: Whether to include explanation
-            
-        Returns:
-            Prediction result dictionary
-        """
-        model_name = model_name or self.default_model
-        
-        if model_name not in self.models:
-            available = list(self.models.keys())
-            raise ValueError(f"Model '{model_name}' not found. Available: {available}")
-        
-        model = self.models[model_name]
-        
+        """Make a prediction on input text (single model only)."""
+        model_name = self.default_model
+        if not self.models:
+            raise ValueError("No model loaded. Train with: python main.py --train")
+        model = self.models[self.default_model]
+
         start_time = time.time()
-        
-        # Get prediction
-        if model_name == 'bert':
-            proba = model.predict_proba([text])[0]
-            pred = proba.argmax()
-        else:
-            proba = model.predict_proba(pd.Series([text]))[0]
-            pred = proba.argmax()
+        proba = model.predict_proba(pd.Series([text]))[0]
+        pred = proba.argmax()
         
         latency_ms = (time.time() - start_time) * 1000
         
@@ -120,7 +77,7 @@ class InferenceEngine:
         
         # Add explanation if requested (needed for flagged terms in credibility audit)
         explanation_features = None
-        if include_explanation and model_name != 'bert':
+        if include_explanation:
             from src.explainability import ModelExplainer
             explainer = ModelExplainer()
             explanation = explainer.explain_with_lime(
@@ -340,15 +297,10 @@ def predict():
         return jsonify({'error': 'Provide either non-empty \"text\" or a valid \"url\".'}), 400
     
     text = str(text)
-    model_name = data.get('model')
-    # Credibility audit requires LIME; include explanation when model supports it
     include_explanation = data.get('include_explanation', True)
-    if model_name == 'bert':
-        include_explanation = False
-
     try:
         engine = InferenceEngine()
-        result = engine.predict(text, model_name, include_explanation, url=url or None)
+        result = engine.predict(text, include_explanation=include_explanation, url=url or None)
         return jsonify(result)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
@@ -371,14 +323,11 @@ def predict_batch():
         return jsonify({'error': 'Missing required field: texts'}), 400
     
     texts = data['texts']
-    model_name = data.get('model')
-    
     if not isinstance(texts, list):
         return jsonify({'error': 'texts must be a list'}), 400
-    
     try:
         engine = InferenceEngine()
-        results = engine.predict_batch(texts, model_name)
+        results = engine.predict_batch(texts)
         return jsonify({'predictions': results})
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
@@ -401,11 +350,9 @@ def explain():
         return jsonify({'error': 'Missing required field: text'}), 400
     
     text = data['text']
-    model_name = data.get('model', 'tfidf_logistic')
-    
     try:
         engine = InferenceEngine()
-        result = engine.predict(text, model_name, include_explanation=True)
+        result = engine.predict(text, include_explanation=True)
         return jsonify(result)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400

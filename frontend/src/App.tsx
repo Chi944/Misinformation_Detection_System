@@ -7,6 +7,15 @@ const API_BASE: string =
   import.meta.env.VITE_API_BASE ??
   (import.meta.env.DEV ? "" : "http://127.0.0.1:5000");
 
+type LexicalDiversity = {
+  type_token_ratio: number;
+  unique_words: number;
+  total_words: number;
+  avg_word_length: number;
+  avg_sentence_length: number;
+  sentence_count: number;
+};
+
 type CredibilityAudit = {
   sensationalism: number;
   political_bias: {
@@ -21,6 +30,7 @@ type CredibilityAudit = {
   };
   factuality_index: number;
   flagged_terms: Array<{ term: string; weight: number; reason: string }>;
+  lexical_diversity?: LexicalDiversity;
 };
 
 type PredictionResponse = {
@@ -45,7 +55,6 @@ const App: React.FC = () => {
   const [text, setText] = useState("");
   const [url, setUrl] = useState("");
   const [header, setHeader] = useState("");
-  const [model, setModel] = useState<string>("tfidf_logistic");
   const [includeExplanation, setIncludeExplanation] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,7 +73,7 @@ const App: React.FC = () => {
     setResult(null);
 
     try {
-      const payload: any = { model, include_explanation: includeExplanation };
+      const payload: any = { include_explanation: includeExplanation };
       if (mode === "text") {
         payload.text = text;
       } else {
@@ -160,24 +169,11 @@ const App: React.FC = () => {
             )}
 
             <div className="form-row">
-              <label className="label-inline">
-                Model
-                <select
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                >
-                  <option value="tfidf_logistic">TF‑IDF + Logistic</option>
-                  <option value="naive_bayes">Naive Bayes</option>
-                  <option value="bert">BERT (if trained)</option>
-                </select>
-              </label>
-
               <label className="checkbox-label">
                 <input
                   type="checkbox"
                   checked={includeExplanation}
                   onChange={(e) => setIncludeExplanation(e.target.checked)}
-                  disabled={model === "bert"}
                 />
                 Include explanation (LIME)
               </label>
@@ -217,7 +213,7 @@ const App: React.FC = () => {
             <div className="result">
               <div className="result-header">
                 <span className="pill">
-                  Model: <strong>{result.model}</strong>
+                  Model: <strong>TF-IDF + Logistic</strong>
                 </span>
                 <span className="pill">
                   Latency: <strong>{result.latency_ms.toFixed(2)} ms</strong>
@@ -319,6 +315,14 @@ const App: React.FC = () => {
                           {(result.credibility_audit.factuality_index * 100).toFixed(1)}%
                         </span>
                       </div>
+                      {result.credibility_audit.lexical_diversity && (
+                        <div className="audit-metric lexical-diversity">
+                          <span className="audit-label">Lexical diversity</span>
+                          <span className="audit-value">
+                            TTR: {result.credibility_audit.lexical_diversity.type_token_ratio.toFixed(2)} · {result.credibility_audit.lexical_diversity.unique_words} unique / {result.credibility_audit.lexical_diversity.total_words} words · avg word: {result.credibility_audit.lexical_diversity.avg_word_length} chars · avg sentence: {result.credibility_audit.lexical_diversity.avg_sentence_length} words
+                          </span>
+                        </div>
+                      )}
                     </div>
                     {result.credibility_audit.flagged_terms.length > 0 && (
                       <div className="flagged-terms">

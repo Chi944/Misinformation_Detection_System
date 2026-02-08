@@ -18,14 +18,7 @@ for dir_path in [DATA_DIR, RAW_DATA_DIR, PROCESSED_DATA_DIR, MODELS_DIR, RESULTS
     dir_path.mkdir(parents=True, exist_ok=True)
 
 # Model settings
-MAX_SEQUENCE_LENGTH = 512
-BATCH_SIZE = 16
-LEARNING_RATE = 2e-5
-NUM_EPOCHS = 3
 RANDOM_SEED = 42
-
-# BERT model configuration
-BERT_MODEL_NAME = "distilbert-base-uncased"  # Using DistilBERT for latency optimization
 
 # Traditional ML settings (tuned for higher accuracy)
 TFIDF_MAX_FEATURES = 25000

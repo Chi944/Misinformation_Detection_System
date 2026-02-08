@@ -108,9 +108,8 @@ Open **http://localhost:5173** in your browser. The frontend proxies API request
 | `python main.py --api` | Start API server (default port 5000) |
 | `python main.py --api --port 8080` | Start API on a custom port |
 | `python main.py --demo` | Run CLI inference demo |
-| `python main.py --train` | Train traditional ML models (TF-IDF+LR, Naive Bayes) |
-| `python main.py --train --train-bert` | Train all models including BERT |
-| `python main.py --evaluate` | Evaluate trained models on test set |
+| `python main.py --train` | Train the TF-IDF + Logistic Regression model |
+| `python main.py --evaluate` | Evaluate the trained model on test set |
 | `python main.py --all` | Full pipeline: train → evaluate → demo |
 
 **Data sources (automatic)**
@@ -123,8 +122,6 @@ Open **http://localhost:5173** in your browser. The frontend proxies API request
 
 ## How to Train the Model Further
 
-### Traditional ML (TF-IDF + Logistic Regression, Naive Bayes)
-
 1. **Prepare data**  
    Place CSV files in `data/raw/`. The preprocessing expects columns such as `text` and `label` (0 = Credible, 1 = Misinformation). Adjust `src/data_preprocessing.py` if your schema differs.
 
@@ -132,34 +129,18 @@ Open **http://localhost:5173** in your browser. The frontend proxies API request
    ```powershell
    python main.py --train
    ```
-   Models are saved to `models/` (e.g. `tfidf_logistic.pkl`, `naive_bayes.pkl`).
+   The model is saved to `models/tfidf_logistic.pkl`.
 
 3. **Optional: Hyperparameter tuning**
    ```powershell
    python main.py --train --tune
    ```
 
-### BERT (DistilBERT)
-
-1. **Install optional dependencies**
+4. **Re-evaluate after training**
    ```powershell
-   pip install -r requirements-bert.txt
+   python main.py --evaluate
    ```
-   (or install `torch` and `transformers` manually)
-
-2. **Train BERT**
-   ```powershell
-   python main.py --train --train-bert
-   ```
-   Uses GPU if available. The model is saved to `models/bert_model/`.
-
-### Re-evaluate After Training
-
-```powershell
-python main.py --evaluate
-```
-
-This runs all loaded models on the test set and writes visualizations to `results/`.
+   This runs the trained model on the test set and writes visualizations to `results/`.
 
 ---
 
@@ -168,23 +149,21 @@ This runs all loaded models on the test set and writes visualizations to `result
 ```
 orchids-misinformation-detection-app/
 ├── main.py              # CLI entry: train, evaluate, demo, api
-├── requirements.txt     # Core Python deps
-├── requirements-bert.txt # Optional: torch, transformers
+├── requirements.txt     # Python dependencies
 ├── src/
 │   ├── config.py        # Paths, labels, constants
 │   ├── data_preprocessing.py
-│   ├── traditional_ml.py # TF-IDF+LR, Naive Bayes
-│   ├── deep_learning.py  # BERT (if installed)
+│   ├── traditional_ml.py # TF-IDF + Logistic Regression (single model)
 │   ├── evaluation.py    # Metrics, plots
 │   ├── explainability.py # LIME
-│   ├── credibility_audit.py # Sensationalism, bias, etc.
+│   ├── credibility_audit.py # Sensationalism, bias, source credibility, etc.
 │   └── inference.py     # Flask API, URL fetch
 ├── frontend/            # React + Vite UI
 │   └── src/
 │       ├── App.tsx
 │       └── index.css
 ├── data/raw/            # Training data
-├── models/              # Saved models
+├── models/              # Saved model (tfidf_logistic.pkl)
 └── results/             # Evaluation outputs
 ```
 

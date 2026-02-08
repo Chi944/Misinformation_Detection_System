@@ -21,7 +21,7 @@ Follow these steps in order. Only one small set of Python packages is installed.
 cd C:\Users\Desto\orchids-projects\orchids-misinformation-detection-app
 ```
 
-You must be in the folder that contains `main.py` and `requirements-minimal.txt`.
+You must be in the folder that contains `main.py` and `requirements.txt`.
 
 ---
 
@@ -40,7 +40,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 .\setup.ps1
 ```
 
-**What this does:** Creates a `.venv` folder and installs only the packages in `requirements-minimal.txt` (no Hugging Face, no extra tools). You should see “Done. Next steps:” at the end.
+**What this does:** Creates a `.venv` folder and installs only the packages in `requirements.txt` (no Hugging Face, no extra tools). You should see “Done. Next steps:” at the end.
 
 **If setup.ps1 fails:** do it manually:
 
@@ -70,7 +70,7 @@ py -3.12 -m venv .venv
 
 - **If you have `FakeNewsNet.csv`** in the project folder: training uses that file.
 - **If you don’t:** the app uses synthetic data and you’ll see “Creating synthetic dataset…”.
-- Wait until you see **“TRAINING COMPLETE”**. Models are saved in the `models` folder.
+- Wait until you see **“TRAINING COMPLETE”**. The model is saved in the `models` folder.
 
 ---
 

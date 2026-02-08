@@ -478,33 +478,22 @@ def evaluate_all_models(test_df: pd.DataFrame,
 
 if __name__ == "__main__":
     from src.data_preprocessing import prepare_data
-    from src.traditional_ml import NaiveBayesClassifier, TfidfLogisticClassifier
-    
+    from src.traditional_ml import train_single_model, TfidfLogisticClassifier
+    from src.config import MODELS_DIR
+
     print("Preparing data...")
     train_df, val_df, test_df = prepare_data()
-    
-    print("\nTraining models for evaluation demo...")
-    
-    # Train simple models
-    nb = NaiveBayesClassifier()
-    nb.fit(train_df['combined_text'], train_df['label'])
-    
+    print("\nTraining TF-IDF + Logistic Regression...")
+    train_single_model(train_df, val_df)
+    tfidf_path = MODELS_DIR / "tfidf_logistic.pkl"
     tfidf_lr = TfidfLogisticClassifier()
-    tfidf_lr.fit(train_df['combined_text'], train_df['label'])
-    
-    models = {
-        'Naive Bayes': {
-            'model': nb,
-            'latency': nb.measure_inference_latency(test_df['combined_text'])
-        },
-        'TF-IDF + Logistic Regression': {
-            'model': tfidf_lr,
-            'latency': tfidf_lr.measure_inference_latency(test_df['combined_text'])
-        }
-    }
-    
-    print("\nRunning evaluation...")
-    evaluator = evaluate_all_models(test_df, models)
-    
+    tfidf_lr.load(tfidf_path)
+    X_test = test_df["combined_text"]
+    y_true = test_df["label"].values
+    y_pred = tfidf_lr.predict(X_test)
+    y_proba = tfidf_lr.predict_proba(X_test)[:, 1]
+    latency = tfidf_lr.measure_inference_latency(X_test)
+    evaluator = ModelEvaluator()
+    evaluator.evaluate_model("TF-IDF + LR", y_true, y_pred, y_proba, latency)
     print("\nComparison Table:")
     print(evaluator.compare_models())

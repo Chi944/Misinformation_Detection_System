@@ -1,3 +1,0 @@
-# Optional: BERT model (install after requirements.txt)
-torch>=2.0.0
-transformers>=4.30.0

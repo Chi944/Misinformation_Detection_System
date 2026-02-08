@@ -48,10 +48,8 @@ class InferenceEngine:
         self.models = models or _models
         self.default_model = 'tfidf_logistic'
 
-    def predict(self, text: str, model_name: Optional[str] = None,
-                include_explanation: bool = False, url: Optional[str] = None) -> Dict[str, Any]:
-        """Make a prediction on input text (single model only)."""
-        model_name = self.default_model
+    def predict(self, text: str, include_explanation: bool = False, url: Optional[str] = None) -> Dict[str, Any]:
+        """Make a prediction on input text using the single TF-IDF + LR model."""
         if not self.models:
             raise ValueError("No model loaded. Train with: python main.py --train")
         model = self.models[self.default_model]
@@ -70,7 +68,7 @@ class InferenceEngine:
             'probabilities': {
                 LABEL_NAMES[i]: float(p) for i, p in enumerate(proba)
             },
-            'model': model_name,
+            'model': self.default_model,
             'latency_ms': round(latency_ms, 2),
             'within_latency_constraint': latency_ms <= MAX_INFERENCE_LATENCY_MS
         }
@@ -120,27 +118,16 @@ class InferenceEngine:
             predicted_label=predicted_label,
         )
     
-    def predict_batch(self, texts: list, model_name: Optional[str] = None) -> list:
-        """
-        Make predictions on multiple texts.
-        
-        Args:
-            texts: List of input texts
-            model_name: Name of the model to use
-            
-        Returns:
-            List of prediction results
-        """
-        return [self.predict(text, model_name) for text in texts]
-    
+    def predict_batch(self, texts: list) -> list:
+        """Make predictions on multiple texts using the single model."""
+        return [self.predict(text) for text in texts]
+
     def get_model_info(self) -> Dict[str, Any]:
-        """Get information about loaded models."""
-        info = {
-            'available_models': list(self.models.keys()),
-            'default_model': self.default_model,
+        """Get information about the loaded model."""
+        return {
+            'model': self.default_model,
             'latency_constraint_ms': MAX_INFERENCE_LATENCY_MS
         }
-        return info
 
 
 def _extract_text_from_html(html: str) -> str:
@@ -260,14 +247,13 @@ def health_check():
     """Health check endpoint."""
     return jsonify({
         'status': 'healthy',
-        'models_loaded': len(_models) > 0,
-        'available_models': list(_models.keys())
+        'model_loaded': len(_models) > 0
     })
 
 
 @app.route('/models', methods=['GET'])
 def get_models():
-    """Get information about available models."""
+    """Get information about the loaded model."""
     engine = InferenceEngine()
     return jsonify(engine.get_model_info())
 
@@ -276,13 +262,7 @@ def get_models():
 def predict():
     """
     Make a prediction on input text.
-    
-    Request body:
-        - text: Input text to classify (optional)
-        - url: URL to fetch and analyse (optional)
-        - header: Optional article/post header/headline (used with url)
-        - model: Model name to use (optional)
-        - include_explanation: Whether to include explanation (optional)
+    Request body: text (optional), url (optional), header (optional), include_explanation (optional).
     """
     data = request.get_json() or {}
     
@@ -310,13 +290,7 @@ def predict():
 
 @app.route('/predict/batch', methods=['POST'])
 def predict_batch():
-    """
-    Make predictions on multiple texts.
-    
-    Request body:
-        - texts: List of input texts (required)
-        - model: Model name to use (optional)
-    """
+    """Make predictions on multiple texts. Request body: texts (required)."""
     data = request.get_json()
     
     if not data or 'texts' not in data:
@@ -337,13 +311,7 @@ def predict_batch():
 
 @app.route('/explain', methods=['POST'])
 def explain():
-    """
-    Get detailed explanation for a prediction.
-    
-    Request body:
-        - text: Input text to explain (required)
-        - model: Model name to use (optional)
-    """
+    """Get detailed explanation for a prediction. Request body: text (required)."""
     data = request.get_json()
     
     if not data or 'text' not in data:

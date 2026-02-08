@@ -25,8 +25,8 @@ assert len(train_df) > 0 and "combined_text" in train_df.columns
 print(f"  train={len(train_df)}, val={len(val_df)}, test={len(test_df)}")
 
 step("Importing traditional_ml and training")
-from src.traditional_ml import train_traditional_baselines
-train_traditional_baselines(train_df, val_df)
+from src.traditional_ml import train_single_model
+train_single_model(train_df, val_df)
 
 step("Loading inference and predicting")
 from src.inference import load_models, InferenceEngine

@@ -4,16 +4,6 @@ models/tfidf_keras_model/
 *.pyc
 __pycache__/
 .env
-<<<<<<< HEAD
-.env.local
-
-# IDE
-.idea
-.vscode
-node_modules/
-data/processed/
-models/
-=======
 feedback.db
 *.flag
 reports/*.png
@@ -21,4 +11,3 @@ reports/*.json
 data/*.csv
 !data/sample_train.csv
 !data/README.md
->>>>>>> 87f6fe1ff (feat: switch LLM judge to local Ollama and scaffold v1 structure)

@@ -25,8 +25,6 @@ jobs:
   test:
     needs: lint
     runs-on: ubuntu-latest
-    env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -49,7 +47,9 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-      - name: Run accuracy gate
+      - name: Train models
+        run: python scripts/train_all.py
+      - name: Run accuracy gate tests
         run: python tests/test_accuracy_gate.py
 
   smoke-test:
@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions.setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install dependencies
@@ -65,4 +65,32 @@ jobs:
           pip install -r requirements.txt
       - name: Run smoke test
         run: timeout 60 python scripts/smoke_test.py
+
+  auto-commit-reports:
+    needs: smoke-test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      - name: Configure git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Commit reports and changelog
+        run: |
+          git add reports/ CHANGELOG.md || true
+          if git diff --cached --quiet; then
+            echo "No report changes to commit."
+          else
+            git commit -m "chore: update evaluation reports [skip ci]"
+            git push
+          fi
 

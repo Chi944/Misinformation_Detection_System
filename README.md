@@ -13,7 +13,7 @@ Short version:
 
 1. **Install Python** from [python.org](https://www.python.org/downloads/) (check “Add to PATH”).
 2. **In PowerShell:** `cd C:\path\to\misinformation-detection-app`
-3. **Setup once:** `.\setup.ps1` (installs only `requirements-minimal.txt`).
+3. **Setup once:** `.\setup.ps1` (installs only `requirements.txt`).
 4. **Train:** `.\.venv\Scripts\python main.py --train` (for best accuracy use `--train --tune`)
 5. **Start API:** `.\.venv\Scripts\python main.py --api --port 5000`
 6. **Optional frontend:** In a new terminal, `cd frontend` then `npm install` and `npm run dev`; open http://localhost:5173.

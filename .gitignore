@@ -1,20 +1,10 @@
-# Dependencies
-node_modules
-.venv-py38
-venv
-__pycache__
+models/*.pt
+models/*.pkl
+models/tfidf_keras_model/
 *.pyc
-.pytest_cache
-
-# Build / cache
-.next
-.vite
-dist
-build
-*.egg-info
-
-# Environment
+__pycache__/
 .env
+<<<<<<< HEAD
 .env.local
 
 # IDE
@@ -23,3 +13,12 @@ build
 node_modules/
 data/processed/
 models/
+=======
+feedback.db
+*.flag
+reports/*.png
+reports/*.json
+data/*.csv
+!data/sample_train.csv
+!data/README.md
+>>>>>>> 87f6fe1ff (feat: switch LLM judge to local Ollama and scaffold v1 structure)

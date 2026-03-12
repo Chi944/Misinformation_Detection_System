@@ -1,0 +1,52 @@
+models:
+  bert:
+    weight: 0.50
+    checkpoint: bert-base-uncased
+    max_length: 512
+    batch_size: 16
+    epochs: 5
+    learning_rate: 2.0e-5
+    dropout: 0.3
+    freeze_layers: 6
+  tfidf:
+    weight: 0.30
+    max_features: 100000
+    ngram_range: [1, 3]
+    char_ngram_range: [2, 4]
+    hidden_layers: [512, 256, 128, 64]
+    epochs: 20
+    learning_rate: 1.0e-3
+    dropout: 0.4
+  naive_bayes:
+    weight: 0.20
+    alpha: 1.0
+    max_features: 50000
+    ngram_range: [1, 2]
+
+fuzzy:
+  defuzzification: centroid
+  threshold_suspicious: 0.45
+  threshold_misinformation: 0.65
+
+llm_judge:
+  host: http://localhost:11434
+  model: llama3
+  temperature: 0.1
+  max_tokens: 600
+  batch_size: 10
+  max_retries: 3
+  backoff_base: 2
+
+feedback:
+  high_error_threshold: 0.25
+  bert_update_lr: 5.0e-6
+  bert_update_steps: 3
+  tfidf_update_epochs: 2
+  min_f1_threshold: 0.75
+  consecutive_fail_limit: 3
+
+evaluation:
+  output_dir: reports/
+  save_disagreements: true
+  recalibrate_weights: true
+

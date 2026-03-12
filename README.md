@@ -12,7 +12,7 @@ A credibility audit system that classifies text and URLs as **Credible** or **Mi
 Short version:
 
 1. **Install Python** from [python.org](https://www.python.org/downloads/) (check “Add to PATH”).
-2. **In PowerShell:** `cd C:\Users\Desto\orchids-projects\orchids-misinformation-detection-app`
+2. **In PowerShell:** `cd C:\path\to\misinformation-detection-app`
 3. **Setup once:** `.\setup.ps1` (installs only `requirements-minimal.txt`).
 4. **Train:** `.\.venv\Scripts\python main.py --train` (for best accuracy use `--train --tune`)
 5. **Start API:** `.\.venv\Scripts\python main.py --api --port 5000`
@@ -47,7 +47,7 @@ python main.py --api --port 5000
 If activation fails (e.g. no `Scripts` or `bin`), use the venv’s Python and pip directly. **Run from the project folder** (where `requirements.txt` and `main.py` are):
 
 ```powershell
-cd C:\Users\Desto\orchids-projects\orchids-misinformation-detection-app
+cd C:\path\to\misinformation-detection-app
 
 # Create venv (only once)
 python -m venv .venv
@@ -147,7 +147,7 @@ Open **http://localhost:5173** in your browser. The frontend proxies API request
 ## Project Structure
 
 ```
-orchids-misinformation-detection-app/
+misinformation-detection-app/
 ├── main.py              # CLI entry: train, evaluate, demo, api
 ├── requirements.txt     # Python dependencies
 ├── src/

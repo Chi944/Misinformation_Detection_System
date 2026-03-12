@@ -38,22 +38,27 @@ if (-not (Test-Path $venvPath)) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-$pipExe = Join-Path $venvPath "Scripts\pip.exe"
-if (-not (Test-Path $pipExe)) { $pipExe = Join-Path $venvPath "bin\pip.exe" }
 $pythonVenv = Join-Path $venvPath "Scripts\python.exe"
 if (-not (Test-Path $pythonVenv)) { $pythonVenv = Join-Path $venvPath "bin\python.exe" }
+if (-not (Test-Path $pythonVenv)) { $pythonVenv = Join-Path $venvPath "bin\python" }
+if (-not (Test-Path $pythonVenv)) { $pythonVenv = Join-Path $venvPath "Scripts\python" }
 
-if (-not (Test-Path $pipExe)) {
-    Write-Host "ERROR: pip not found in .venv" -ForegroundColor Red
+if (-not (Test-Path $pythonVenv)) {
+    Write-Host "ERROR: python not found in .venv" -ForegroundColor Red
     exit 1
 }
 
 # Single install: minimal only (no Hugging Face, no extra packages)
-$trusted = "--trusted-host pypi.org", "--trusted-host pypi.python.org", "--trusted-host files.pythonhosted.org"
+$trustedHosts = @(
+    "--trusted-host", "pypi.org",
+    "--trusted-host", "pypi.python.org",
+    "--trusted-host", "files.pythonhosted.org"
+)
 $req = Join-Path $ProjectRoot "requirements.txt"
 
 Write-Host "Installing minimal dependencies (this is the only download) ..." -ForegroundColor Green
-& $pipExe install --upgrade pip @trusted -r $req
+& $pythonVenv -m pip install --upgrade pip @trustedHosts
+& $pythonVenv -m pip install @trustedHosts -r $req
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Install failed. Use Python from python.org and run again." -ForegroundColor Red
     exit $LASTEXITCODE

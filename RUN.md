@@ -18,7 +18,7 @@ Follow these steps in order. Only one small set of Python packages is installed.
 ## Step 2: Open PowerShell and go to the project folder
 
 ```powershell
-cd C:\Users\Desto\orchids-projects\orchids-misinformation-detection-app
+cd C:\path\to\misinformation-detection-app
 ```
 
 You must be in the folder that contains `main.py` and `requirements.txt`.
@@ -102,7 +102,7 @@ Leave this window open. The API is now running.
 Open a **new** PowerShell window:
 
 ```powershell
-cd C:\Users\Desto\orchids-projects\orchids-misinformation-detection-app\frontend
+cd C:\path\to\misinformation-detection-app\frontend
 npm install
 npm run dev
 ```
@@ -137,7 +137,7 @@ Run from the project folder. If `.\.venv\Scripts\...` gives “not recognized”
 
 - **“No such file or directory”**  
   Make sure you’re in the project folder:  
-  `cd C:\Users\Desto\orchids-projects\orchids-misinformation-detection-app`
+  `cd C:\path\to\misinformation-detection-app`
 
 - **“externally-managed-environment”**  
   Always use the venv:  

@@ -1,6 +1,6 @@
+import argparse
 import os
 import sys
-import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -115,7 +115,7 @@ def run_smoke_test(config_path="config.yaml"):
         ds.create_synthetic(n_samples=60)
         texts, labels = ds.to_sklearn("train")
         assert len(texts) > 0
-        assert all(l in (0, 1) for l in labels)
+        assert all(label in (0, 1) for label in labels)
         logger.info("  PASS dataset train=%d", len(texts))
         passed += 1
     except Exception as e:

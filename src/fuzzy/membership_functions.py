@@ -23,10 +23,11 @@ from __future__ import annotations
 
 from typing import Dict
 
-import src.utils.skfuzzy_compat  # noqa: F401
 import numpy as np
 import skfuzzy as fuzz
 from skfuzzy import control as ctrl
+
+import src.utils.skfuzzy_compat  # noqa: F401
 
 
 def _make_antecedent(name: str, universe: np.ndarray) -> ctrl.Antecedent:

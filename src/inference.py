@@ -8,15 +8,14 @@ Provides a Flask REST API for model predictions, including:
 import re
 import time
 from html import unescape
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-from src.config import MODELS_DIR, LABEL_NAMES, MAX_INFERENCE_LATENCY_MS
-
+from src.config import LABEL_NAMES, MAX_INFERENCE_LATENCY_MS, MODELS_DIR
 
 app = Flask(__name__)
 # Allow browser-based frontends (React, etc.) to call the API

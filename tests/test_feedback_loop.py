@@ -1,4 +1,8 @@
-import sys, os, csv, pytest
+import csv
+import os
+import sys
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.feedback.feedback_store import FeedbackStore

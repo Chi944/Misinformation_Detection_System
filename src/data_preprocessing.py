@@ -4,27 +4,27 @@ Uses Hugging Face: load_dataset("kasperdinh/fake-news-detection") plus data in d
 Handles HTML parsing, deduplication, and train/val/test splitting.
 """
 
-import re
 import hashlib
-import pandas as pd
-import numpy as np
-from typing import Tuple, List, Optional, Dict, Any
+import re
+import warnings
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
 import nltk
-from nltk.tokenize import word_tokenize
+import numpy as np
+import pandas as pd
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
 from sklearn.model_selection import train_test_split
-import warnings
 
 from src.config import (
-    RAW_DATA_DIR,
     PROCESSED_DATA_DIR,
     PROJECT_ROOT,
     RANDOM_SEED,
+    RAW_DATA_DIR,
     TEST_SIZE,
     VAL_SIZE,
-    TRAIN_SIZE,
 )
 
 warnings.filterwarnings("ignore")

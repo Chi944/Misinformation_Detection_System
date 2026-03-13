@@ -18,7 +18,6 @@ import importlib.util
 import sys
 import types
 
-
 if sys.version_info >= (3, 12) and "imp" not in sys.modules:
     imp_shim = types.ModuleType("imp")
 

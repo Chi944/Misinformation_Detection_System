@@ -1,6 +1,7 @@
-import logging
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+
 from src.utils.logger import get_logger
 
 
@@ -210,7 +211,7 @@ class BackpropFeedbackLoop:
         """
         from sklearn.metrics import accuracy_score, f1_score
 
-        y_true = [int(l) for l in true_labels]
+        y_true = [int(label) for label in true_labels]
         metrics = {}
         for name in ["bert", "tfidf", "naive_bayes"]:
             y_pred = [p["model_breakdown"][name]["label"] for p in predictions]

@@ -1,6 +1,7 @@
 import os
-import numpy as np
+
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 from src.utils.logger import get_logger
@@ -77,7 +78,7 @@ class EvaluationDashboard:
 
     def _plot_roc_curves(self, fig, eval_data):
         """ROC curves for all 4 models on same axes."""
-        from sklearn.metrics import roc_curve, auc
+        from sklearn.metrics import auc, roc_curve
 
         ax = fig.add_subplot(6, 2, 3)
         colors = {"bert": "blue", "tfidf": "green", "naive_bayes": "orange", "ensemble": "red"}
@@ -107,8 +108,9 @@ class EvaluationDashboard:
 
     def _plot_fuzzy_membership(self, fig):
         """Fuzzy output membership function visualization."""
-        import src.utils.skfuzzy_compat  # noqa: F401
         import skfuzzy as fuzz
+
+        import src.utils.skfuzzy_compat  # noqa: F401
 
         ax = fig.add_subplot(6, 2, 4)
         universe = np.arange(0.0, 1.01, 0.01)

@@ -1,5 +1,7 @@
 import os
+
 import yaml
+
 from src.utils.logger import get_logger
 
 
@@ -87,8 +89,9 @@ class MisinformationDetector:
             self.logger.info("fast_mode=True: skipping BERT init")
         else:
             try:
-                from src.models.bert_classifier import BERTMisinformationClassifier
                 from transformers import BertTokenizer
+
+                from src.models.bert_classifier import BERTMisinformationClassifier
 
                 self.bert_model = BERTMisinformationClassifier(
                     dropout=cfg.get("bert", {}).get("dropout", 0.3)

@@ -4,27 +4,26 @@ Provides comprehensive metrics, visualizations, and model comparison.
 """
 
 import json
-from typing import Dict, Any, List, Optional
 from pathlib import Path
+from typing import Any, Dict, Optional
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import (
     accuracy_score,
+    auc,
+    average_precision_score,
+    confusion_matrix,
+    f1_score,
+    precision_recall_curve,
     precision_score,
     recall_score,
-    f1_score,
-    confusion_matrix,
-    classification_report,
     roc_curve,
-    auc,
-    precision_recall_curve,
-    average_precision_score,
 )
 
-from src.config import RESULTS_DIR, LABEL_NAMES
+from src.config import LABEL_NAMES, RESULTS_DIR
 
 
 class ModelEvaluator:
@@ -499,9 +498,9 @@ def evaluate_all_models(
 
 
 if __name__ == "__main__":
-    from src.data_preprocessing import prepare_data
-    from src.traditional_ml import train_single_model, TfidfLogisticClassifier
     from src.config import MODELS_DIR
+    from src.data_preprocessing import prepare_data
+    from src.traditional_ml import TfidfLogisticClassifier, train_single_model
 
     print("Preparing data...")
     train_df, val_df, test_df = prepare_data()

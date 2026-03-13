@@ -10,14 +10,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-from torch import nn
-from torch.utils.data import DataLoader
-from torch.cuda.amp import GradScaler, autocast
 from sklearn.metrics import f1_score
+from torch import nn
+from torch.cuda.amp import GradScaler, autocast
+from torch.utils.data import DataLoader
 from transformers import BertForSequenceClassification, get_linear_schedule_with_warmup
 
 

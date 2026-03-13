@@ -2,7 +2,6 @@
 Configuration settings for the misinformation detection system.
 """
 
-import os
 from pathlib import Path
 
 # Project paths

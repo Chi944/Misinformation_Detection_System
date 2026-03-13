@@ -126,7 +126,7 @@ class EnsembleDetector:
             label_from_p1(p1_tfidf),
             label_from_p1(p1_nb),
         ]
-        agreement = float(sum(l == crisp_label for l in labels) / len(labels))
+        agreement = float(sum(label == crisp_label for label in labels) / len(labels))
 
         weights_dict = {
             "bert": float(self.weights.bert),

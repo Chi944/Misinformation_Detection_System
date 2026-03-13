@@ -1,8 +1,9 @@
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, precision_score, f1_score
+from sklearn.metrics import accuracy_score, f1_score, precision_score
 from sklearn.naive_bayes import MultinomialNB
+
 from src.utils.logger import get_logger
 
 

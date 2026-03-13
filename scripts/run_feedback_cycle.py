@@ -1,12 +1,12 @@
+import argparse
 import os
 import sys
-import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.utils.logger import get_logger
-from src.training.dataset import MisinformationDataset
 from src.detector import MisinformationDetector
+from src.training.dataset import MisinformationDataset
+from src.utils.logger import get_logger
 
 logger = get_logger("run_feedback_cycle")
 

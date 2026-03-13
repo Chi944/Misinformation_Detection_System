@@ -1,8 +1,9 @@
 from __future__ import annotations
-import src.utils.skfuzzy_compat  # noqa: F401 — must be first, fixes Python 3.12
-import logging
+
 import numpy as np
 import skfuzzy as fuzz
+
+import src.utils.skfuzzy_compat  # noqa: F401 — must be first, fixes Python 3.12
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)

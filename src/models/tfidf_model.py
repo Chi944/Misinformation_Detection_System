@@ -41,8 +41,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 try:  # pragma: no cover
     import tensorflow as tf
-    from tensorflow.keras import Sequential
-    from tensorflow.keras import layers, optimizers, regularizers
+    from tensorflow.keras import Sequential, layers, optimizers, regularizers
 except Exception:  # pragma: no cover
     tf = None  # type: ignore[assignment]
     Sequential = None  # type: ignore[assignment]

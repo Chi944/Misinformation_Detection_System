@@ -6,8 +6,7 @@ Factuality Index, Flagged Terms, and Lexical Diversity (vocabulary richness, lan
 
 import json
 import re
-from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from src.config import DATA_DIR

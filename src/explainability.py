@@ -3,15 +3,15 @@ Explainability module for misinformation detection models.
 Provides LIME explanations and attention-based saliency mapping.
 """
 
-from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from lime.lime_text import LimeTextExplainer
 
-from src.config import RESULTS_DIR, LABEL_NAMES
+from src.config import LABEL_NAMES, RESULTS_DIR
 
 
 class ModelExplainer:

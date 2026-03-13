@@ -29,8 +29,7 @@ def main():
     ap.add_argument("--max-per-class", type=int, default=None, help="Cap rows per label (0/1)")
     ap.add_argument("-o", "--output", default=None, help="Output CSV path (default: data/train.csv)")
     args = ap.parse_args()
-    root = os.path.dirname(os.path.abspath(__file__))
-    out_path = args.output or os.path.join(root, "data", "train.csv")
+    out_path = args.output or os.path.join(_root, "data", "train.csv")
     sources = [s.lower() for s in (args.sources or list(LOADERS.keys()))]
     all_rows = []
     for name in sources:

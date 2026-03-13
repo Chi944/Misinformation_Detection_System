@@ -16,9 +16,15 @@ def _to_binary(score):
 
 
 def load_liar(data_dir=None):
-    """Load LIAR train.tsv, valid.tsv, test.tsv from data/raw/liar/. Returns list of dicts."""
+    """Load LIAR train.tsv, valid.tsv, test.tsv from data/raw/liar/ or data/raw/. Returns list of dicts."""
     if data_dir is None:
-        data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "raw", "liar")
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "raw")
+        for candidate in [os.path.join(base, "liar"), base]:
+            if os.path.isfile(os.path.join(candidate, "train.tsv")):
+                data_dir = candidate
+                break
+        else:
+            data_dir = os.path.join(base, "liar")
     rows = []
     for name in ("train.tsv", "valid.tsv", "test.tsv"):
         path = os.path.join(data_dir, name)
@@ -43,3 +49,8 @@ def load_liar(data_dir=None):
                     "source": SOURCE_NAME,
                 })
     return rows
+
+
+if __name__ == "__main__":
+    rows = load_liar()
+    print("%d rows" % len(rows))

@@ -8,9 +8,12 @@ SOURCE_NAME = "fakenewsnet"
 
 
 def load_fakenewsnet(data_dir=None):
-    """Load FakeNewsNet from data/raw/fakenewsnet/. Supports .json or .csv with text and label."""
+    """Load FakeNewsNet from data/raw/fakenewsnet/ or data/raw/FakeNewsNet.csv. Supports .json or .csv."""
     if data_dir is None:
-        data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "raw", "fakenewsnet")
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "raw")
+        data_dir = os.path.join(base, "fakenewsnet")
+        if not os.path.isdir(data_dir):
+            data_dir = base
     if not os.path.isdir(data_dir):
         return []
     rows = []

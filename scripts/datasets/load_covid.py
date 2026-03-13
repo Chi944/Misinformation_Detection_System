@@ -37,3 +37,8 @@ def load_covid(data_dir=None):
                     "source": SOURCE_NAME,
                 })
     return rows
+
+
+if __name__ == "__main__":
+    rows = load_covid()
+    print("%d rows" % len(rows))

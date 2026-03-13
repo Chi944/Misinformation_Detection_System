@@ -1,6 +1,14 @@
 """Load WELFake dataset (Zenodo). Labels: 0=fake, 1=real — we invert to 0=credible, 1=misinformation."""
 import csv
 import os
+import sys
+
+# Allow large text fields in WELFake CSV
+if hasattr(csv, "field_size_limit"):
+    try:
+        csv.field_size_limit(10**7)
+    except OverflowError:
+        pass
 
 MAX_TEXT_LEN = 1000
 SOURCE_NAME = "welfake"
@@ -10,8 +18,11 @@ def load_welfake(data_dir=None):
     """Load WELFake from data/raw/welfake/. WELFake 0=fake -> label 1, 1=real -> label 0."""
     if data_dir is None:
         data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "raw", "welfake")
-    path = os.path.join(data_dir, "WELFake.csv")
-    if not os.path.isfile(path):
+    for fname in ("WELFake.csv", "WELFake_Dataset.csv"):
+        path = os.path.join(data_dir, fname)
+        if os.path.isfile(path):
+            break
+    else:
         return []
     rows = []
     with open(path, "r", encoding="utf-8", errors="replace") as f:

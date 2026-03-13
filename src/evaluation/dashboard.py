@@ -4,7 +4,7 @@ import matplotlib
 import numpy as np
 
 matplotlib.use("Agg")
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger  # noqa: E402
 
 
 class EvaluationDashboard:

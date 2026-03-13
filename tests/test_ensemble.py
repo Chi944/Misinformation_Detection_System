@@ -4,7 +4,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.models.ensemble_detector import EnsembleDetector
+from src.models.ensemble_detector import EnsembleDetector  # noqa: E402
 
 
 @pytest.fixture

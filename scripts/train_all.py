@@ -4,9 +4,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.training.dataset import MisinformationDataset
-from src.training.trainer import MasterTrainer
-from src.utils.logger import get_logger
+from src.training.dataset import MisinformationDataset  # noqa: E402
+from src.training.trainer import MasterTrainer  # noqa: E402
+from src.utils.logger import get_logger  # noqa: E402
 
 logger = get_logger("train_all")
 

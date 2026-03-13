@@ -4,7 +4,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.models.naive_bayes_model import TFNaiveBayesWrapper
+from src.models.naive_bayes_model import TFNaiveBayesWrapper  # noqa: E402
 
 TEXTS = [
     "Peer reviewed study.",

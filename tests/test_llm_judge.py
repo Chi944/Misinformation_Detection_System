@@ -4,8 +4,8 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.evaluation.llm_judge import LLMJudge
-from src.utils.logger import get_logger
+from src.evaluation.llm_judge import LLMJudge  # noqa: E402
+from src.utils.logger import get_logger  # noqa: E402
 
 
 def _judge():

@@ -271,7 +271,7 @@ class ModelEvaluator:
 
         for i, metric in enumerate(available_metrics):
             offset = (i - len(available_metrics) / 2) * width
-            bars = ax.bar(x + offset, df[metric], width, label=metric)
+            ax.bar(x + offset, df[metric], width, label=metric)
 
         ax.set_xlabel("Model")
         ax.set_ylabel("Score")

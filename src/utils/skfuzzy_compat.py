@@ -25,7 +25,7 @@ if sys.version_info >= (3, 12) and "imp" not in sys.modules:
     imp_shim.load_source = lambda name, path: importlib.import_module(name)
     imp_shim.find_module = lambda name, path=None: (None, None, None)
 
-    def _load_module(name, file, pathname, description):  # type: ignore[override]
+    def _load_module(name, _file, pathname, _description):  # type: ignore[override]
         spec = importlib.util.spec_from_file_location(name, pathname)
         module = importlib.util.module_from_spec(spec)
         assert spec and spec.loader is not None

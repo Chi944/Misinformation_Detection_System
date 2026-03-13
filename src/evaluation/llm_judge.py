@@ -169,6 +169,7 @@ class LLMJudge:
         Returns:
             list: judgment dicts, one per sample
         """
+        _ = batch_size  # kept for API compatibility
         results = []
         for i, item in enumerate(dataset):
             try:

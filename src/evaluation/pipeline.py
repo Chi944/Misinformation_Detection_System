@@ -109,8 +109,15 @@ class EvaluationPipeline:
         """Unpack dataset into texts, labels, categories."""
         if hasattr(dataset, "df"):
             df = dataset.df
-            cats = df["category"].tolist() if "category" in df.columns else None
-            return df["text"].tolist(), df["label"].tolist(), cats
+            if hasattr(df, "columns"):
+                cats = df["category"].tolist() if "category" in df.columns else None
+                return df["text"].tolist(), [int(x) for x in df["label"].tolist()], cats
+            # list of dicts (MisinformationDataset)
+            if df and isinstance(df[0], dict):
+                texts = [r["text"] for r in df]
+                labels = [int(r["label"]) for r in df]
+                cats = [r.get("category") for r in df] if df and "category" in df[0] else None
+                return texts, labels, cats
 
         texts, y_true, cats = [], [], []
         for item in dataset:

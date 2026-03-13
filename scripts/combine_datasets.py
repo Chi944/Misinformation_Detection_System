@@ -1,7 +1,8 @@
-"""Combine all available dataset loaders into a single CSV (text, label, category, source)."""
+"""Combine all available dataset loaders into train/val/test CSVs (text, label, category, source)."""
 import argparse
 import csv
 import os
+import random
 import sys
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -54,12 +55,24 @@ def main():
     if not all_rows:
         print("No data found. Download datasets and place in data/raw/<source>/ as per scripts/datasets/download_all.py", file=sys.stderr)
         return 1
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    with open(out_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["text", "label", "category", "source"])
-        w.writeheader()
-        w.writerows(all_rows)
-    print("Wrote %d rows to %s" % (len(all_rows), out_path))
+    data_dir = os.path.dirname(out_path) or "."
+    os.makedirs(data_dir, exist_ok=True)
+    random.seed(42)
+    random.shuffle(all_rows)
+    n = len(all_rows)
+    n_val = int(n * 0.10)
+    n_test = int(n * 0.10)
+    val_rows = all_rows[:n_val]
+    test_rows = all_rows[n_val : n_val + n_test]
+    train_rows = all_rows[n_val + n_test :]
+    fieldnames = ["text", "label", "category", "source"]
+    for name, rows in [("train", train_rows), ("val", val_rows), ("test", test_rows)]:
+        path = os.path.join(data_dir, "%s.csv" % name)
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            w.writerows(rows)
+        print("Wrote %d rows to %s" % (len(rows), path))
     return 0
 
 

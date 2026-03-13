@@ -36,7 +36,7 @@ def main():
         logger.warning("Data not found: %s - using synthetic fallback", args.data)
         dataset.create_synthetic(n_samples=200)
 
-    detector = MisinformationDetector(config=args.config, fast_mode=True)
+    detector = MisinformationDetector(config=args.config, fast_mode=False)
 
     use_judge = not args.no_judge
     report = detector.evaluate(dataset, use_llm_judge=use_judge)

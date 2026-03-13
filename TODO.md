@@ -97,3 +97,24 @@
 - [x] 15.12 Run: git add -A
 - [x] 15.13 Run: git commit -m "feat: complete misinformation detector v1.0.0"
 - [x] 15.14 Run: git push origin main
+
+## PHASE 16: Real Data Integration
+- [ ] 16.1 Download ISOT dataset from Kaggle
+- [ ] 16.2 Download LIAR dataset from HuggingFace
+- [ ] 16.3 Download WELFake dataset from Zenodo
+- [ ] 16.4 Download COVID Fake News dataset from HuggingFace
+- [ ] 16.5 Download FakeNewsNet dataset from GitHub
+- [ ] 16.6 Run: python scripts/datasets/download_all.py
+- [ ] 16.7 Run: python scripts/combine_datasets.py
+- [ ] 16.8 Run: python scripts/train_all.py --data data/train.csv
+- [ ] 16.9 Run: python scripts/evaluate.py (verify gates pass on real data)
+- [ ] 16.10 Run: python scripts/run_feedback_cycle.py
+
+## PHASE 17: Optional Enhancements
+- [ ] 17.1 Add a REST API endpoint using FastAPI
+- [ ] 17.2 Add a simple web UI for live predictions
+- [ ] 17.3 Add multilingual support (non-English misinformation)
+- [ ] 17.4 Add source credibility database (known reliable/unreliable domains)
+- [ ] 17.5 Add explainability output (which words drove the prediction)
+- [ ] 17.6 Connect Ollama to a larger model (llama3:70b or mistral)
+- [ ] 17.7 Deploy to a cloud server or HuggingFace Spaces

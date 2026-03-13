@@ -11,3 +11,8 @@ reports/*.json
 data/*.csv
 !data/sample_train.csv
 !data/README.md
+
+# Large local directories
+.venv/
+.venv-py38/
+node_modules/

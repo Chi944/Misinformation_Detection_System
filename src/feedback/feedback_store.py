@@ -1,203 +1,186 @@
-"""Feedback storage for misinformation detection.
-
-This module belongs to the *feedback* component of the pipeline. It implements
-an SQLite-backed store for model predictions, ground truth labels, fuzzy
-scores, and error signals, and exposes utilities used by the feedback loop.
-"""
-
-from __future__ import annotations
-
 import sqlite3
-from pathlib import Path
-from typing import Any, Dict, List, Tuple
-
+import os
+import json
+import logging
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-
 from src.utils.logger import get_logger
-
-LOGGER = get_logger(__name__)
 
 
 class FeedbackStore:
-    """SQLite-backed feedback store.
+    """
+    Persistent SQLite-backed store for all feedback signals generated
+    during backward propagation cycles.
 
-    Component:
-        Feedback / Storage.
+    Stores per-sample prediction errors, fuzzy scores, and true labels.
+    Provides nearest-neighbor lookup using TF-IDF cosine similarity to
+    estimate how error-prone similar texts have been historically.
+
+    Part of the feedback loop pipeline in BackpropFeedbackLoop.
 
     Args:
-        path: Path to the SQLite database file.
+        db_path (str): Path to SQLite database file. Default: feedback.db
     """
 
-    def __init__(self, path: str = "feedback.db") -> None:
-        self.path = Path(path)
-        self._ensure_schema()
+    def __init__(self, db_path="feedback.db"):
+        self.db_path = db_path
+        self.logger = get_logger(__name__)
+        self._init_db()
+        # Lazy import to keep module import fast on Windows.
+        from sklearn.feature_extraction.text import TfidfVectorizer
 
-    # ----------------------------------------------------------------- internals
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        self._vectorizer = TfidfVectorizer(max_features=10000, ngram_range=(1, 2))
+        self._vectorizer_fitted = False
+        self._cached_texts = []
+        self._cached_errors = []
 
-    def _ensure_schema(self) -> None:
-        """Create tables if they do not exist."""
-
-        with self._connect() as conn:
+    def _init_db(self):
+        """Create feedback_entries table if it does not exist."""
+        with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS feedback (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    text TEXT NOT NULL,
-                    prediction INTEGER NOT NULL,
-                    true_label INTEGER,
-                    fuzzy_score REAL,
-                    total_error REAL,
-                    bert_error REAL,
+                CREATE TABLE IF NOT EXISTS feedback_entries (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    text        TEXT    NOT NULL,
+                    prediction  TEXT    NOT NULL,
+                    true_label  INTEGER NOT NULL,
+                    fuzzy_score REAL    NOT NULL,
+                    bert_error  REAL,
                     tfidf_error REAL,
-                    nb_error REAL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    nb_error    REAL,
+                    total_error REAL,
+                    cycle_num   INTEGER DEFAULT 0,
+                    timestamp   DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-                """
+            """
             )
             conn.commit()
 
-    # --------------------------------------------------------------------- save
-    def save(
-        self,
-        text: str,
-        prediction: int,
-        true_label: int,
-        fuzzy_score: float,
-        error_dict: Dict[str, float],
-    ) -> None:
-        """Persist a single feedback entry.
+    def save(self, text, prediction, true_label, fuzzy_score, error_dict):
+        """
+        Persist one feedback entry to SQLite.
 
         Args:
-            text: Input text.
-            prediction: Ensemble prediction (0 or 1).
-            true_label: Ground truth label (0 or 1).
-            fuzzy_score: Fuzzy score in [0, 1].
-            error_dict: Dictionary containing per-model and total errors.
+            text (str): input text sample
+            prediction (dict or str): model prediction dict or label string
+            true_label (int): 0=credible, 1=misinformation
+            fuzzy_score (float): output from FuzzyMisinformationEngine
+            error_dict (dict): keys bert_error, tfidf_error, nb_error,
+                               total_error
         """
-
-        with self._connect() as conn:
+        pred_str = json.dumps(prediction) if isinstance(prediction, dict) else str(prediction)
+        with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                """
-                INSERT INTO feedback (
-                    text, prediction, true_label, fuzzy_score,
-                    total_error, bert_error, tfidf_error, nb_error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                """INSERT INTO feedback_entries
+                   (text, prediction, true_label, fuzzy_score,
+                    bert_error, tfidf_error, nb_error, total_error)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     text,
-                    int(prediction),
+                    pred_str,
                     int(true_label),
                     float(fuzzy_score),
-                    float(error_dict.get("total_error", 0.0)),
                     float(error_dict.get("bert_error", 0.0)),
                     float(error_dict.get("tfidf_error", 0.0)),
                     float(error_dict.get("nb_error", 0.0)),
+                    float(error_dict.get("total_error", 0.0)),
                 ),
             )
             conn.commit()
 
-    # ------------------------------------------------------------- query helpers
-    def _fetch_all_texts_and_errors(self) -> Tuple[List[str], np.ndarray]:
-        with self._connect() as conn:
-            cur = conn.execute(
-                "SELECT text, total_error FROM feedback WHERE total_error IS NOT NULL"
-            )
-            rows = cur.fetchall()
-        texts = [str(r["text"]) for r in rows]
-        errors = np.asarray([float(r["total_error"]) for r in rows], dtype="float32")
-        return texts, errors
+        self._cached_texts.append(text)
+        self._cached_errors.append(float(error_dict.get("total_error", 0.0)))
 
-    # --------------------------------------------------------------- public API
-    def get_feedback_score(self, text: str) -> float:
-        """Compute a feedback score based on nearest-neighbour errors.
+        if len(self._cached_texts) >= 10:
+            self._refit_vectorizer()
 
-        The score is the normalized mean error (0.0–1.0) of the k most similar
-        historical samples, where similarity is measured using TF-IDF cosine
-        similarity.
+        self.logger.debug("Feedback entry saved (total=%d)", len(self._cached_texts))
+
+    def _refit_vectorizer(self):
+        """Re-fit TF-IDF vectorizer on all cached texts."""
+        self._vectorizer.fit(self._cached_texts)
+        self._vectorizer_fitted = True
+
+    def get_feedback_score(self, text) -> float:
+        """
+        Estimate error-proneness of a text using nearest-neighbor lookup.
+
+        Transforms the query text and all cached texts with TF-IDF, finds
+        the 5 most similar cached entries by cosine similarity, and returns
+        their mean total_error as a normalized score in [0.0, 1.0].
 
         Args:
-            text: Input text.
+            text (str): query text
+        Returns:
+            float: mean error of nearest neighbors, or 0.5 if insufficient
+                   history exists (fewer than 10 cached entries)
+        """
+        if not self._vectorizer_fitted or len(self._cached_texts) < 10:
+            return 0.5
+        try:
+            from sklearn.metrics.pairwise import cosine_similarity
+
+            query_vec = self._vectorizer.transform([text])
+            corpus_vec = self._vectorizer.transform(self._cached_texts)
+            sims = cosine_similarity(query_vec, corpus_vec)[0]
+            top_k = min(5, len(sims))
+            top_idx = np.argsort(sims)[-top_k:]
+            mean_error = float(np.mean([self._cached_errors[i] for i in top_idx]))
+            return float(np.clip(mean_error, 0.0, 1.0))
+        except Exception as e:
+            self.logger.warning("get_feedback_score failed: %s", e)
+            return 0.5
+
+    def get_high_error_samples(self, threshold=0.3, limit=100) -> list:
+        """
+        Return samples whose total_error exceeds the threshold.
+
+        Args:
+            threshold (float): minimum total_error to qualify
+            limit (int): maximum number of records to return
+        Returns:
+            list of dicts with keys: text, true_label, total_error, timestamp
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """SELECT text, true_label, total_error, timestamp
+                   FROM feedback_entries
+                   WHERE total_error > ?
+                   ORDER BY total_error DESC
+                   LIMIT ?""",
+                (threshold, limit),
+            )
+            rows = cursor.fetchall()
+        return [
+            {
+                "text": row[0],
+                "true_label": row[1],
+                "total_error": row[2],
+                "timestamp": row[3],
+            }
+            for row in rows
+        ]
+
+    def export_to_csv(self, path):
+        """
+        Export the full feedback history to a CSV file.
+
+        Args:
+            path (str): destination file path
+        """
+        import pandas as pd
+
+        with sqlite3.connect(self.db_path) as conn:
+            df = pd.read_sql_query("SELECT * FROM feedback_entries ORDER BY timestamp", conn)
+        df.to_csv(path, index=False)
+        self.logger.info("Exported %d feedback entries to %s", len(df), path)
+
+    def get_cycle_count(self) -> int:
+        """
+        Return the number of distinct feedback cycles stored.
 
         Returns:
-            float: Feedback score in [0.0, 1.0].
+            int: count of distinct cycle_num values in the database
         """
-
-        texts, errors = self._fetch_all_texts_and_errors()
-        if not texts:
-            return 0.0
-
-        corpus = texts + [text]
-        vect = TfidfVectorizer(max_features=5000)
-        X = vect.fit_transform(corpus)
-        sims = cosine_similarity(X[-1], X[:-1]).ravel()
-        if sims.size == 0:
-            return 0.0
-
-        k = min(10, sims.size)
-        idx = np.argsort(-sims)[:k]
-        neighbour_errors = errors[idx]
-        score = float(np.clip(neighbour_errors.mean(), 0.0, 1.0))
-        return score
-
-    def get_high_error_samples(
-        self,
-        threshold: float = 0.3,
-        limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """Return high-error samples above the given threshold.
-
-        Args:
-            threshold: Minimum ``total_error`` to be considered high.
-            limit: Maximum number of rows to return.
-
-        Returns:
-            list of dicts with keys ``text``, ``true_label``, ``prediction``,
-            and ``total_error``.
-        """
-
-        with self._connect() as conn:
-            cur = conn.execute(
-                """
-                SELECT text, true_label, prediction, total_error
-                FROM feedback
-                WHERE total_error >= ?
-                ORDER BY total_error DESC
-                LIMIT ?
-                """,
-                (float(threshold), int(limit)),
-            )
-            rows = cur.fetchall()
-        return [dict(r) for r in rows]
-
-    def export_to_csv(self, path: str | Path) -> None:
-        """Export the entire feedback history to a CSV file.
-
-        Args:
-            path: Output CSV path.
-        """
-
-        import csv
-
-        out_path = Path(path)
-        with self._connect() as conn:
-            cur = conn.execute("SELECT * FROM feedback ORDER BY id ASC")
-            rows = cur.fetchall()
-
-        if not rows:
-            LOGGER.info("No feedback rows to export.")
-            return
-
-        fieldnames = rows[0].keys()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with out_path.open("w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for r in rows:
-                writer.writerow(dict(r))
-
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT COUNT(DISTINCT cycle_num) FROM feedback_entries")
+            return int(cursor.fetchone()[0])

@@ -1,151 +1,171 @@
-# src/training/calibration.py
-"""Calibration utilities for model outputs.
-
-This module belongs to the *training* component of the pipeline. It provides
-helpers for Platt scaling, temperature scaling, and isotonic calibration for
-the ensemble.
-
-The interfaces are minimal so that the Trainer can plug them in after
-training base models.
-"""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Any, Dict, Tuple
-
 import numpy as np
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.isotonic import IsotonicRegression
-
-try:
-    import torch
-except ImportError:  # pragma: no cover
-    torch = None  # type: ignore
+from src.utils.logger import get_logger
 
 
-@dataclass
-class CalibrationResult:
-    """Container for calibration artefacts."""
+class TemperatureScaler:
+    """
+    Post-hoc probability calibration using temperature scaling.
 
-    info: Dict[str, Any]
+    Learns a single temperature parameter T that scales logits so that
+    the model's confidence better matches empirical accuracy.
 
+    Calibration should be run on a held-out validation set AFTER
+    the main model is trained, not during training.
 
-class CalibrationWrapper:
-    """Calibration helper for Naive Bayes, BERT, and ensemble.
-
-    Component:
-        Training / Calibration.
+    Args:
+        init_temp (float): starting temperature. Default 1.0 (no-op)
     """
 
-    # -------------------------- Naive Bayes: Platt scaling ------------------
-    @staticmethod
-    def platt_scaling(
-        base_clf,
-        X_val,
-        y_val,
-    ) -> Tuple[Any, CalibrationResult]:
-        """Apply Platt scaling (sigmoid) to a base classifier.
+    def __init__(self, init_temp=1.0):
+        self.temperature = float(init_temp)
+        self.logger = get_logger(__name__)
+
+    def fit(self, logits, y_true, lr=0.01, max_iter=50):
+        """
+        Fit temperature by minimising NLL on validation logits.
 
         Args:
-            base_clf: Fitted scikit-learn classifier with predict_proba.
-            X_val: Validation features.
-            y_val: Validation labels.
-
+            logits (array): raw pre-sigmoid logits, shape (N,)
+            y_true (array): ground truth labels 0/1, shape (N,)
+            lr (float): learning rate for gradient descent
+            max_iter (int): maximum gradient steps
         Returns:
-            (calibrated_clf, CalibrationResult)
+            float: fitted temperature
         """
-        calib = CalibratedClassifierCV(base_clf, method="sigmoid", cv="prefit")
-        calib.fit(X_val, y_val)
-        return calib, CalibrationResult(info={"method": "platt_sigmoid"})
+        logits = np.array(logits, dtype=float)
+        y_true = np.array(y_true, dtype=float)
+        T = self.temperature
 
-    # ----------------------------- BERT: temperature scaling -----------------
-    @staticmethod
-    def _nll_with_temperature(logits: torch.Tensor, labels: torch.Tensor, T: torch.Tensor) -> torch.Tensor:
-        """Negative log-likelihood under temperature-scaled logits."""
-        scaled_logits = logits / T
-        log_probs = torch.log_softmax(scaled_logits, dim=1)
-        loss = torch.nn.functional.nll_loss(log_probs, labels)
-        return loss
+        for step in range(max_iter):
+            scaled = logits / T
+            probs = self._sigmoid(scaled)
+            probs = np.clip(probs, 1e-7, 1 - 1e-7)
+            nll = -np.mean(y_true * np.log(probs) + (1 - y_true) * np.log(1 - probs))
+            # Gradient of NLL w.r.t. T
+            grad = np.mean((probs - y_true) * (-logits / (T**2)))
+            T = T - lr * grad
+            T = max(0.01, T)  # prevent collapse to zero
 
-    @staticmethod
-    def temperature_scaling(
-        model: torch.nn.Module,
-        val_loader,
-        device: torch.device | None = None,
-    ) -> Tuple[float, CalibrationResult]:
-        """Learn a single temperature parameter for BERT on validation data.
+            if step % 10 == 0:
+                self.logger.debug("Calibration step %d T=%.4f NLL=%.4f", step, T, nll)
+
+        self.temperature = T
+        self.logger.info("Temperature calibration done: T=%.4f", T)
+        return T
+
+    def calibrate(self, probs):
+        """
+        Apply temperature scaling to raw probabilities.
+
+        Converts probs -> logits -> scale by T -> convert back.
 
         Args:
-            model: Trained BERT classifier.
-            val_loader: DataLoader with validation batches.
-            device: Torch device.
-
+            probs (array): raw model probabilities in [0, 1]
         Returns:
-            (temperature, CalibrationResult)
+            array: calibrated probabilities
         """
-        if torch is None:
-            raise ImportError("PyTorch not available for temperature scaling.")
+        probs = np.clip(np.array(probs, dtype=float), 1e-7, 1 - 1e-7)
+        logits = np.log(probs / (1 - probs))  # inverse sigmoid
+        scaled = logits / self.temperature
+        return self._sigmoid(scaled)
 
-        device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model.eval()
-
-        all_logits = []
-        all_labels = []
-        with torch.no_grad():
-            for batch in val_loader:
-                ids = batch["input_ids"].to(device)  # type: ignore[arg-type]
-                mask = batch["attention_mask"].to(device)  # type: ignore[arg-type]
-                tti = batch.get("token_type_ids")
-                if tti is not None:
-                    tti = tti.to(device)  # type: ignore[assignment]
-                labels = batch["label"].to(device)  # type: ignore[arg-type]
-                # Get logits before softmax: we can invert BERTMisinformationClassifier
-                # by using the classifier head directly if needed; here we re-logit
-                # from probabilities as a proxy.
-                probs = model(ids, attention_mask=mask, token_type_ids=tti)
-                logits = torch.log(probs + 1e-12)
-                all_logits.append(logits)
-                all_labels.append(labels)
-
-        logits_cat = torch.cat(all_logits, dim=0)
-        labels_cat = torch.cat(all_labels, dim=0)
-
-        T = torch.nn.Parameter(torch.ones(1, device=device))
-
-        optimizer = torch.optim.LBFGS([T], lr=0.01, max_iter=50)
-
-        def _closure():
-            optimizer.zero_grad()
-            loss = CalibrationWrapper._nll_with_temperature(logits_cat, labels_cat, T)
-            loss.backward()
-            return loss
-
-        optimizer.step(_closure)
-        temperature = float(T.detach().cpu().item())
-        return temperature, CalibrationResult(info={"method": "temperature", "T": temperature})
-
-    # --------------------------- Ensemble: isotonic regression ---------------
-    @staticmethod
-    def isotonic_regression(
-        ensemble_probs: np.ndarray,
-        y_val: np.ndarray,
-    ) -> Tuple[IsotonicRegression, CalibrationResult]:
-        """Fit isotonic regression on ensemble probabilities.
+    def calibrate_single(self, prob):
+        """
+        Calibrate a single probability value.
 
         Args:
-            ensemble_probs: Array of shape (n_samples, 2) or (n_samples,) for
-                the positive class.
-            y_val: Binary labels.
-
+            prob (float): raw probability
         Returns:
-            (isotonic_model, CalibrationResult)
+            float: calibrated probability
         """
-        if ensemble_probs.ndim == 2:
-            p1 = ensemble_probs[:, 1]
-        else:
-            p1 = ensemble_probs
+        return float(self.calibrate(np.array([prob]))[0])
 
-        iso = IsotonicRegression(out_of_bounds="clip")
-        iso.fit(p1, y_val.astype(float))
-        return iso, CalibrationResult(info={"method": "isotonic"})
+    def _sigmoid(self, x):
+        """Numerically stable sigmoid."""
+        return np.where(x >= 0, 1.0 / (1.0 + np.exp(-x)), np.exp(x) / (1.0 + np.exp(x)))
+
+    def get_state(self):
+        """Return serialisable state dict."""
+        return {"temperature": self.temperature}
+
+    def load_state(self, state):
+        """
+        Load temperature from state dict.
+
+        Args:
+            state (dict): previously saved state from get_state()
+        """
+        self.temperature = float(state.get("temperature", 1.0))
+
+
+class EnsembleCalibrator:
+    """
+    Calibrates all 3 models plus the ensemble using TemperatureScaler.
+
+    Maintains one TemperatureScaler per model. Calibrated probabilities
+    are fed back into ensemble weight recalibration.
+
+    Args:
+        None
+    """
+
+    def __init__(self):
+        self.scalers = {
+            "bert": TemperatureScaler(),
+            "tfidf": TemperatureScaler(),
+            "naive_bayes": TemperatureScaler(),
+            "ensemble": TemperatureScaler(),
+        }
+        self.logger = get_logger(__name__)
+
+    def fit_all(self, model_logits_dict, y_true):
+        """
+        Fit a temperature scaler for each model simultaneously.
+
+        Args:
+            model_logits_dict (dict): model_name -> logits array
+            y_true (array): ground truth labels
+        Returns:
+            dict: model_name -> fitted temperature value
+        """
+        temperatures = {}
+        for name, logits in model_logits_dict.items():
+            if name not in self.scalers:
+                self.scalers[name] = TemperatureScaler()
+            T = self.scalers[name].fit(logits, y_true)
+            temperatures[name] = T
+            self.logger.info("Calibrated %s T=%.4f", name, T)
+        return temperatures
+
+    def calibrate_probs(self, model_probs_dict):
+        """
+        Calibrate probabilities for all models.
+
+        Args:
+            model_probs_dict (dict): model_name -> probs array or float
+        Returns:
+            dict: model_name -> calibrated probs
+        """
+        calibrated = {}
+        for name, probs in model_probs_dict.items():
+            if name in self.scalers:
+                calibrated[name] = self.scalers[name].calibrate(np.atleast_1d(probs))
+            else:
+                calibrated[name] = probs
+        return calibrated
+
+    def get_state(self):
+        """Return serialisable state for all scalers."""
+        return {name: scaler.get_state() for name, scaler in self.scalers.items()}
+
+    def load_state(self, state):
+        """
+        Load scaler states from dict.
+
+        Args:
+            state (dict): previously saved state from get_state()
+        """
+        for name, s in state.items():
+            if name not in self.scalers:
+                self.scalers[name] = TemperatureScaler()
+            self.scalers[name].load_state(s)

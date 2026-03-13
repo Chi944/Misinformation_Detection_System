@@ -57,4 +57,3 @@ def test_fuzzy_engine_high_misinfo_inputs_give_high_score():
         }
     )
     assert score > 0.6
-

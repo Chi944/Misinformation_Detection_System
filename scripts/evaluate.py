@@ -1,42 +1,67 @@
-"""Minimal evaluation script for the misinformation detector.
+import os
+import sys
+import argparse
+import json
 
-For now this script simply loads the trained models via
-``src.detector.MisinformationDetector`` and runs predictions over the test
-split of ``data/sample_train.csv``, computing aggregate accuracy. Later phases
-will replace this with the full :mod:`src.evaluation.pipeline` orchestration.
-"""
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from __future__ import annotations
-
-from pathlib import Path
-
-import numpy as np
-
-from src.detector import MisinformationDetector
+from src.utils.logger import get_logger
 from src.training.dataset import MisinformationDataset
+from src.detector import MisinformationDetector
+
+logger = get_logger("evaluate")
 
 
-def main() -> None:
-    """Run a quick evaluation on the held-out test split."""
+def parse_args():
+    """Parse evaluate.py arguments."""
+    parser = argparse.ArgumentParser(description="Evaluate misinformation detector")
+    parser.add_argument("--data", default="data/test.csv")
+    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--synthetic", action="store_true")
+    parser.add_argument("--no-judge", action="store_true", help="Skip LLM judge evaluation")
+    return parser.parse_args()
 
-    data_path = "data/sample_train.csv"
-    ds = MisinformationDataset(data_path)
-    X_test, y_test = ds.to_sklearn("test")
 
-    detector = MisinformationDetector(config="config.yaml", fast_mode=True)
+def main():
+    """Run evaluation pipeline and print summary report."""
+    args = parse_args()
+    logger.info("Starting evaluate.py")
 
-    preds = []
-    for text in X_test:
-        out = detector.predict(str(text))
-        label = out["ensemble"]["label"]
-        preds.append(1 if label == "misinformation" else 0)
+    dataset = MisinformationDataset()
+    if args.synthetic:
+        logger.info("Using synthetic dataset")
+        dataset.create_synthetic(n_samples=200)
+    elif os.path.exists(args.data):
+        dataset.load(args.data)
+    else:
+        logger.warning("Data not found: %s - using synthetic fallback", args.data)
+        dataset.create_synthetic(n_samples=200)
 
-    y_pred = np.asarray(preds, dtype=int)
-    acc = float((y_pred == y_test).mean()) if len(y_test) else 0.0
+    detector = MisinformationDetector(config=args.config, fast_mode=True)
 
-    print(f"[evaluate] Accuracy on test split: {acc:.3f}")
+    use_judge = not args.no_judge
+    report = detector.evaluate(dataset, use_llm_judge=use_judge)
+
+    print("")
+    print("=== Evaluation Report ===")
+    for model_name, metrics in report.get("model_metrics", {}).items():
+        std = metrics.get("standard", {})
+        print(
+            "%s -> acc=%.4f precision=%.4f recall=%.4f f1=%.4f"
+            % (
+                model_name.upper(),
+                std.get("accuracy", 0.0),
+                std.get("precision", 0.0),
+                std.get("recall", 0.0),
+                std.get("f1", 0.0),
+            )
+        )
+    print("Samples evaluated: %d" % report.get("sample_count", 0))
+    report_path = os.path.join("reports", "evaluation_report.json")
+    if os.path.exists(report_path):
+        print("Full report saved to: %s" % report_path)
+    print("=== Done ===")
 
 
 if __name__ == "__main__":
     main()
-

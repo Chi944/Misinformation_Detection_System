@@ -1,266 +1,228 @@
-"""LLM-as-judge evaluation utilities using a local Ollama model.
-
-This module belongs to the *evaluation* component of the pipeline. Instead of
-calling a hosted Anthropic API, it talks to a local Ollama instance running a
-model such as ``llama3``.
-"""
-
-from __future__ import annotations
-
-import asyncio
 import json
-import os
-import random
-import re
-from typing import Any, Dict, List, Optional
-
 import requests
+from src.utils.logger import get_logger
 
 
 class LLMJudge:
-    """LLM-based judge for misinformation detection using Ollama.
-
-    This class keeps the same public async method signatures that other parts
-    of the codebase expect, but internally it sends prompts to a local Ollama
-    server instead of a remote Anthropic endpoint.
-
-    The Ollama service is expected to be available at ``host`` (default
-    ``http://localhost:11434``) and to have the configured model (default
-    ``llama3``) pulled and ready. See the README for instructions.
-
-    Args:
-        host: Base URL of the Ollama server.
-        model: Model name to use (e.g. ``llama3``).
-        max_retries: Maximum number of retries on network / parsing errors.
-        backoff_base: Base for exponential backoff between retries.
+    """
+    Local LLM-as-judge using Ollama. No API key required.
+    Start Ollama: ollama serve
+    Pull model:   ollama pull llama3
     """
 
-    SYSTEM_PROMPT: str = (
-        "You are an expert fact-checker and AI evaluation judge specializing in "
-        "misinformation detection. You will receive: a text sample, predictions from "
-        "3 models (BERT PyTorch, TF-IDF TensorFlow, Naive Bayes), the weighted "
-        "ensemble prediction, a fuzzy confidence score (0.0-1.0), and feedback loop "
-        "cycle metrics.\n\n"
-        "Your task: independently assess credible OR misinformation. Evaluate each "
-        "model as CORRECT, INCORRECT, or UNCERTAIN. Evaluate the ensemble. Identify "
-        "best and worst model. Assess fuzzy calibration. Note if feedback loop is "
-        "improving or degrading accuracy.\n\n"
-        "Return ONLY valid JSON with these exact keys:\n"
-        "independent_verdict (credible|misinformation),\n"
-        "judge_confidence (float),\n"
-        "bert_judgment (CORRECT|INCORRECT|UNCERTAIN),\n"
-        "tfidf_judgment (CORRECT|INCORRECT|UNCERTAIN),\n"
-        "naive_bayes_judgment (CORRECT|INCORRECT|UNCERTAIN),\n"
-        "ensemble_judgment (CORRECT|INCORRECT|UNCERTAIN),\n"
-        "best_model (bert|tfidf|naive_bayes|ensemble),\n"
-        "worst_model (bert|tfidf|naive_bayes),\n"
-        "fuzzy_calibration (well_calibrated|overconfident|underconfident),\n"
-        "suggested_fuzzy_score (float),\n"
-        "feedback_trend (improving|degrading|stable|insufficient_data),\n"
-        "justification (1-2 sentence string),\n"
-        "flags (array of strings)."
-    )
+    REQUIRED_KEYS = [
+        "independent_verdict",
+        "judge_confidence",
+        "bert_judgment",
+        "tfidf_judgment",
+        "naive_bayes_judgment",
+        "ensemble_judgment",
+        "best_model",
+        "worst_model",
+        "fuzzy_calibration",
+        "suggested_fuzzy_score",
+        "feedback_trend",
+        "justification",
+        "flags",
+    ]
 
-    def __init__(
-        self,
-        host: Optional[str] = None,
-        model: Optional[str] = None,
-        max_retries: int = 3,
-        backoff_base: float = 2.0,
-    ) -> None:
-        self.host = host or os.getenv("LLM_JUDGE_HOST", "http://localhost:11434")
-        self.model = model or os.getenv("LLM_JUDGE_MODEL", "llama3")
-        self.max_retries = max_retries
-        self.backoff_base = backoff_base
+    FALLBACK_VERDICT = {
+        "independent_verdict": "uncertain",
+        "judge_confidence": 0.0,
+        "bert_judgment": "UNCERTAIN",
+        "tfidf_judgment": "UNCERTAIN",
+        "naive_bayes_judgment": "UNCERTAIN",
+        "ensemble_judgment": "UNCERTAIN",
+        "best_model": "ensemble",
+        "worst_model": "naive_bayes",
+        "fuzzy_calibration": "well_calibrated",
+        "suggested_fuzzy_score": 0.5,
+        "feedback_trend": "insufficient_data",
+        "justification": "Judge unavailable or parse error.",
+        "flags": ["parse_error"],
+    }
 
-        self._verify_ollama_and_model()
+    def __init__(self, model="llama3", host="http://localhost:11434"):
+        self.model = model
+        self.host = host.rstrip("/")
+        self.logger = get_logger(__name__)
+        self._verify_connection()
 
-    # ------------------------------------------------------------------ utils
-    def _verify_ollama_and_model(self) -> None:
-        """Verify that Ollama is reachable and the model is available.
-
-        Raises:
-            RuntimeError: If Ollama is not reachable or the model is missing.
-        """
-
-        tags_url = f"{self.host.rstrip('/')}/api/tags"
+    def _verify_connection(self):
+        """Verify Ollama is running and model is available."""
         try:
-            resp = requests.get(tags_url, timeout=3)
+            resp = requests.get("%s/api/tags" % self.host, timeout=5)
             resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:  # pragma: no cover - environment dependent
-            raise RuntimeError(
-                f"Ollama not reachable at {tags_url}. "
-                "Ensure Ollama is running and try: `ollama pull llama3`."
-            ) from exc
+        except requests.ConnectionError:
+            raise RuntimeError("Ollama not running. Start with: ollama serve")
+        except Exception as e:
+            raise RuntimeError("Ollama health check failed: %s" % e)
 
-        models = {m.get("name", "") for m in data.get("models", [])}
-        if not any(name.startswith(self.model) for name in models):
+        available = [m.get("name", "") for m in resp.json().get("models", [])]
+        if not any(self.model in name for name in available):
             raise RuntimeError(
-                f"Ollama is running but model '{self.model}' is not available. "
-                f"Install it with: `ollama pull {self.model}`."
+                "Model '%s' not found. Run: ollama pull %s\n"
+                "Available: %s" % (self.model, self.model, available)
             )
+        self.logger.info("LLMJudge ready - model=%s host=%s", self.model, self.host)
 
-    async def _call_with_retry(self, prompt: str) -> str:
-        """Call Ollama with retries and exponential backoff.
-
-        Args:
-            prompt: Prompt string to send.
-
-        Returns:
-            str: The raw response text from the model.
-        """
-
-        async def _once() -> str:
-            url = f"{self.host.rstrip('/')}/api/generate"
-            payload = {
-                "model": self.model,
-                "prompt": prompt,
-                "stream": False,
-            }
-
-            def _do_request() -> str:
-                r = requests.post(url, json=payload, timeout=60)
-                r.raise_for_status()
-                body = r.json()
-                # Ollama returns a single JSON with a 'response' field.
-                return str(body.get("response", ""))
-
-            return await asyncio.to_thread(_do_request)
-
-        last_exc: Optional[Exception] = None
-        for attempt in range(self.max_retries):
-            try:
-                return await _once()
-            except Exception as exc:  # pragma: no cover - network dependent
-                last_exc = exc
-                wait = self.backoff_base**attempt + random.random()
-                await asyncio.sleep(wait)
-        # If we get here, all retries failed
-        raise RuntimeError(f"Ollama call failed after {self.max_retries} attempts") from last_exc
-
-    @staticmethod
-    def _fallback_judgment() -> Dict[str, Any]:
-        """Return a conservative fallback judgment when parsing fails."""
-
-        return {
-            "independent_verdict": "credible",
-            "judge_confidence": 0.0,
-            "bert_judgment": "UNCERTAIN",
-            "tfidf_judgment": "UNCERTAIN",
-            "naive_bayes_judgment": "UNCERTAIN",
-            "ensemble_judgment": "UNCERTAIN",
-            "best_model": "ensemble",
-            "worst_model": "naive_bayes",
-            "fuzzy_calibration": "stable",
-            "suggested_fuzzy_score": 0.5,
-            "feedback_trend": "insufficient_data",
-            "justification": "LLM judge could not produce a reliable structured response.",
-            "flags": [],
-        }
-
-    @staticmethod
-    def _extract_json_block(text: str) -> Dict[str, Any]:
-        """Extract and parse the first JSON object found in text.
-
-        Args:
-            text: Raw text returned by the model.
-
-        Returns:
-            dict: Parsed JSON object.
-        """
-
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if not match:
-            raise ValueError("No JSON object found in model output")
-        return json.loads(match.group(0))
-
-    # ----------------------------------------------------------------- public
-    async def evaluate_single(
-        self,
-        text: str,
-        predictions: Dict[str, Any],
-        fuzzy_score: float,
-        cycle_metrics: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Evaluate a single sample with the LLM judge.
-
-        Args:
-            text: Input text.
-            predictions: Dictionary containing per-model and ensemble predictions.
-            fuzzy_score: Fuzzy confidence score in [0, 1].
-            cycle_metrics: Optional metrics for the current feedback cycle.
-
-        Returns:
-            dict: Judgment dictionary matching the JSON schema in SYSTEM_PROMPT.
-        """
-
-        cycle_metrics = cycle_metrics or {}
-        prompt = (
-            f"{self.SYSTEM_PROMPT}\n\n"
-            f"TEXT:\n{text}\n\n"
-            f"PREDICTIONS (JSON):\n{json.dumps(predictions)}\n\n"
-            f"FUZZY_SCORE: {fuzzy_score}\n\n"
-            f"CYCLE_METRICS (JSON):\n{json.dumps(cycle_metrics)}\n\n"
-            "Return ONLY the JSON object as described."
+    def _build_prompt(self, text, predictions, fuzzy_score, cycle_metrics=None):
+        """Build evaluation prompt for the judge model."""
+        metrics_str = str(cycle_metrics) if cycle_metrics else "N/A"
+        return (
+            "You are an expert fact-checker and AI evaluation judge.\n\n"
+            "Evaluate this text and the model predictions below.\n"
+            "Return ONLY a valid JSON object, no markdown, no extra text.\n\n"
+            'TEXT:\n"""\n%s\n"""\n\n'
+            "PREDICTIONS:\n"
+            "  BERT: %s\n"
+            "  TF-IDF: %s\n"
+            "  Naive Bayes: %s\n"
+            "  Ensemble: %s\n"
+            "  Fuzzy Score: %.4f\n"
+            "  Cycle metrics: %s\n\n"
+            "Return ONLY this JSON:\n"
+            "{\n"
+            '  "independent_verdict": "credible or misinformation",\n'
+            '  "judge_confidence": 0.0,\n'
+            '  "bert_judgment": "CORRECT or INCORRECT or UNCERTAIN",\n'
+            '  "tfidf_judgment": "CORRECT or INCORRECT or UNCERTAIN",\n'
+            '  "naive_bayes_judgment": "CORRECT or INCORRECT or UNCERTAIN",\n'
+            '  "ensemble_judgment": "CORRECT or INCORRECT or UNCERTAIN",\n'
+            '  "best_model": "bert or tfidf or naive_bayes or ensemble",\n'
+            '  "worst_model": "bert or tfidf or naive_bayes",\n'
+            '  "fuzzy_calibration": "well_calibrated or overconfident or underconfident",\n'
+            '  "suggested_fuzzy_score": 0.0,\n'
+            '  "feedback_trend": "improving or degrading or stable or insufficient_data",\n'
+            '  "justification": "1-2 sentence explanation",\n'
+            '  "flags": []\n'
+            "}"
+        ) % (
+            text,
+            predictions.get("bert", "unknown"),
+            predictions.get("tfidf", "unknown"),
+            predictions.get("naive_bayes", "unknown"),
+            predictions.get("ensemble", "unknown"),
+            float(fuzzy_score),
+            metrics_str,
         )
 
+    def _parse_response(self, raw):
+        """Extract and parse JSON from model response."""
+        raw = raw.strip()
+        if "{" in raw and "}" in raw:
+            raw = raw[raw.index("{") : raw.rindex("}") + 1]
         try:
-            raw = await self._call_with_retry(prompt)
-            parsed = self._extract_json_block(raw)
-            # Basic sanity: ensure required keys, else fallback
-            required = {
-                "independent_verdict",
-                "judge_confidence",
-                "bert_judgment",
-                "tfidf_judgment",
-                "naive_bayes_judgment",
-                "ensemble_judgment",
-                "best_model",
-                "worst_model",
-                "fuzzy_calibration",
-                "suggested_fuzzy_score",
-                "feedback_trend",
-                "justification",
-                "flags",
-            }
-            if not required.issubset(parsed.keys()):
-                return self._fallback_judgment()
+            parsed = json.loads(raw)
+            for key in self.REQUIRED_KEYS:
+                if key not in parsed:
+                    parsed[key] = self.FALLBACK_VERDICT[key]
             return parsed
-        except Exception:
-            return self._fallback_judgment()
+        except Exception as e:
+            self.logger.warning("JSON parse failed: %s", e)
+            fallback = dict(self.FALLBACK_VERDICT)
+            fallback["justification"] = "Parse error: %s" % str(e)
+            return fallback
 
-    async def evaluate_batch(
-        self,
-        dataset: List[Dict[str, Any]],
-        batch_size: int = 10,
-    ) -> List[Dict[str, Any]]:
-        """Evaluate a batch of samples concurrently.
+    def evaluate_single(self, text, predictions, fuzzy_score, cycle_metrics=None):
+        """
+        Evaluate one sample with the local Ollama judge.
 
         Args:
-            dataset: Iterable of items containing keys
-                ``text``, ``predictions``, ``fuzzy_score``, and optional
-                ``cycle_metrics``.
-            batch_size: Maximum number of concurrent requests.
-
+            text (str): text to evaluate
+            predictions (dict): bert/tfidf/naive_bayes/ensemble keys
+            fuzzy_score (float): fuzzy engine output
+            cycle_metrics (dict, optional): recent cycle metrics
         Returns:
-            list of dict: One judgment dictionary per input item.
+            dict: judgment with all REQUIRED_KEYS
         """
+        prompt = self._build_prompt(text, predictions, fuzzy_score, cycle_metrics)
+        try:
+            resp = requests.post(
+                "%s/api/generate" % self.host,
+                json={
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.1, "num_predict": 400},
+                },
+                timeout=120,
+            )
+            resp.raise_for_status()
+            raw = resp.json().get("response", "").strip()
+            return self._parse_response(raw)
+        except Exception as e:
+            self.logger.warning("evaluate_single failed: %s - returning fallback", e)
+            fallback = dict(self.FALLBACK_VERDICT)
+            fallback["justification"] = "Judge error: %s" % str(e)
+            return fallback
 
-        results: List[Dict[str, Any]] = []
-        for i in range(0, len(dataset), batch_size):
-            batch = dataset[i : i + batch_size]
-            tasks = [
-                self.evaluate_single(
-                    item["text"],
-                    item["predictions"],
-                    item["fuzzy_score"],
-                    item.get("cycle_metrics"),
-                )
-                for item in batch
-            ]
-            batch_results = await asyncio.gather(*tasks)
-            results.extend(batch_results)
+    def evaluate_batch(self, dataset, batch_size=10):
+        """
+        Evaluate a batch of samples sequentially.
+
+        Args:
+            dataset (list): list of (text, predictions, fuzzy_score) tuples
+            batch_size (int): kept for API compatibility
+        Returns:
+            list: judgment dicts, one per sample
+        """
+        results = []
+        for i, item in enumerate(dataset):
+            try:
+                if len(item) == 3:
+                    text, predictions, fuzzy_score = item
+                    cycle_metrics = None
+                else:
+                    text, predictions, fuzzy_score, cycle_metrics = item
+                result = self.evaluate_single(text, predictions, fuzzy_score, cycle_metrics)
+            except Exception as e:
+                self.logger.warning("Batch item %d failed: %s", i, e)
+                result = dict(self.FALLBACK_VERDICT)
+                result["justification"] = "Batch item error: %s" % str(e)
+            results.append(result)
         return results
 
+    def generate_model_report(self, all_judgments):
+        """
+        Aggregate judgment statistics across all evaluations.
 
+        Args:
+            all_judgments (list): judgment dicts from evaluate_batch
+        Returns:
+            dict: per-model stats and overall summary
+        """
+        if not all_judgments:
+            return {}
+        report = {}
+        for key in ["bert_judgment", "tfidf_judgment", "naive_bayes_judgment", "ensemble_judgment"]:
+            name = key.replace("_judgment", "")
+            judgments = [j.get(key, "UNCERTAIN") for j in all_judgments]
+            total = len(judgments)
+            correct = judgments.count("CORRECT")
+            report[name] = {
+                "correct": correct,
+                "incorrect": judgments.count("INCORRECT"),
+                "uncertain": judgments.count("UNCERTAIN"),
+                "total": total,
+                "agreement_rate": round(correct / total, 4) if total else 0.0,
+            }
+        all_flags = []
+        for j in all_judgments:
+            all_flags.extend(j.get("flags", []))
+        flag_freq = {}
+        for flag in all_flags:
+            flag_freq[flag] = flag_freq.get(flag, 0) + 1
+        confidences = [float(j.get("judge_confidence", 0.0)) for j in all_judgments]
+        report["overall"] = {
+            "total_evaluated": len(all_judgments),
+            "mean_confidence": (
+                round(sum(confidences) / len(confidences), 4) if confidences else 0.0
+            ),
+            "flag_frequency": flag_freq,
+            "best_model_votes": {
+                m: sum(1 for j in all_judgments if j.get("best_model") == m)
+                for m in ["bert", "tfidf", "naive_bayes", "ensemble"]
+            },
+        }
+        return report

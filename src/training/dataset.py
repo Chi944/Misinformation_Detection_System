@@ -1,256 +1,234 @@
-# src/training/dataset.py
-"""Dataset utilities for misinformation detection.
-
-This module belongs to the *training* component of the pipeline. It provides
-unified dataset representations for PyTorch, TensorFlow, and scikit-learn,
-as well as basic SMOTE balancing and back-translation style augmentation.
-"""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
-
+import os
+import json
+import csv
+import random
 import numpy as np
-import pandas as pd
-from imblearn.over_sampling import SMOTE
-from sklearn.model_selection import train_test_split
-
-try:
-    import torch
-    from torch.utils.data import Dataset as TorchDataset
-except ImportError:  # pragma: no cover
-    torch = None
-    TorchDataset = object  # type: ignore
-
-try:
-    import tensorflow as tf
-except ImportError:  # pragma: no cover
-    tf = None  # type: ignore
-
-
-@dataclass
-class SplitConfig:
-    """Configuration for train/val/test splits."""
-
-    test_size: float = 0.1
-    val_size: float = 0.1
-    random_state: int = 42
+from src.utils.logger import get_logger
 
 
 class MisinformationDataset:
-    """Unified dataset wrapper for misinformation tasks.
+    """
+    Loads, validates, and splits misinformation detection datasets.
 
-    The underlying CSV is expected to have at least:
-      - text: str
-      - label: int (0=credible, 1=misinformation)
-    Optional:
-      - category: str
-      - source: str
+    Expects CSV or JSON files with at minimum 'text' and 'label' columns.
+    Labels must be 0 (credible) or 1 (misinformation).
 
-    This class can produce:
-      - PyTorch Dataset for BERT training (tokenization done later in a collate fn).
-      - TensorFlow tf.data.Dataset for TF-IDF training.
-      - Numpy arrays for scikit-learn models (Naive Bayes).
-
-    Component:
-        Training / Dataset.
+    Args:
+        data_path (str): path to CSV or JSON data file
+        test_size (float): fraction held out for test set. Default 0.2
+        val_size (float): fraction of train held out for val. Default 0.1
+        random_seed (int): reproducibility seed. Default 42
     """
 
-    def __init__(self, csv_path: str | Path, split_config: Optional[SplitConfig] = None):
-        self.csv_path = Path(csv_path)
-        self.split_config = split_config or SplitConfig()
-        if not self.csv_path.exists():
-            raise FileNotFoundError(f"Dataset CSV not found at {self.csv_path}")
+    REQUIRED_COLUMNS = ["text", "label"]
 
-        df = pd.read_csv(self.csv_path)
-        if "text" not in df or "label" not in df:
-            raise ValueError("CSV must contain at least 'text' and 'label' columns.")
+    def __init__(self, data_path=None, test_size=0.2, val_size=0.1, random_seed=42):
+        self.data_path = data_path
+        self.test_size = test_size
+        self.val_size = val_size
+        self.random_seed = random_seed
+        self.logger = get_logger(__name__)
+        self.df = None  # list of dicts
+        self.train = []
+        self.val = []
+        self.test = []
 
-        self.df = df
-        self._train_df: Optional[pd.DataFrame] = None
-        self._val_df: Optional[pd.DataFrame] = None
-        self._test_df: Optional[pd.DataFrame] = None
+        if data_path is not None:
+            self.load(data_path)
+
+    def load(self, data_path):
+        """
+        Load dataset from CSV or JSON file.
+
+        Args:
+            data_path (str): path to data file (.csv or .json)
+        Raises:
+            FileNotFoundError: if file does not exist
+            ValueError: if required columns are missing
+        """
+        if not os.path.exists(data_path):
+            raise FileNotFoundError("Dataset not found: %s" % data_path)
+        ext = os.path.splitext(data_path)[1].lower()
+        if ext == ".csv":
+            rows = self._load_csv(data_path)
+        elif ext == ".json":
+            rows = self._load_json(data_path)
+        else:
+            raise ValueError("Unsupported file type: %s (use .csv or .json)" % ext)
+        self._validate(rows)
+        self.df = rows
+        self.logger.info("Loaded %d samples from %s", len(rows), data_path)
         self._split()
 
-    # ------------------------------------------------------------------ splits
-    def _split(self) -> None:
-        """Perform train/val/test split with stratification on label."""
+    def _load_csv(self, path):
+        """Load rows from CSV file."""
+        rows = []
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rows.append(dict(row))
+        return rows
 
-        cfg = self.split_config
-        df = self.df
+    def _load_json(self, path):
+        """Load rows from JSON file (list of dicts)."""
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict) and "data" in data:
+            return data["data"]
+        raise ValueError('JSON must be a list of dicts or {"data": [...]}')
 
-        train_val_df, test_df = train_test_split(
-            df,
-            test_size=cfg.test_size,
-            random_state=cfg.random_state,
-            stratify=df["label"],
+    def _validate(self, rows):
+        """Check required columns and label values."""
+        if not rows:
+            raise ValueError("Dataset is empty")
+        cols = set(rows[0].keys())
+        for col in self.REQUIRED_COLUMNS:
+            if col not in cols:
+                raise ValueError("Missing required column: %s (found: %s)" % (col, cols))
+        bad_labels = [r["label"] for r in rows if str(r["label"]).strip() not in ("0", "1", 0, 1)]
+        if bad_labels:
+            self.logger.warning("%d rows have unexpected labels", len(bad_labels))
+
+    def _split(self):
+        """Split df into train/val/test using stratified sampling."""
+        random.seed(self.random_seed)
+        credible = [r for r in self.df if str(r["label"]).strip() == "0" or r["label"] == 0]
+        misinfo = [r for r in self.df if str(r["label"]).strip() == "1" or r["label"] == 1]
+        random.shuffle(credible)
+        random.shuffle(misinfo)
+
+        def split_class(rows):
+            n = len(rows)
+            n_test = max(1, int(n * self.test_size))
+            n_val = max(1, int((n - n_test) * self.val_size))
+            return (
+                rows[n_test + n_val :],
+                rows[n_test : n_test + n_val],
+                rows[:n_test],
+            )
+
+        tr_c, va_c, te_c = split_class(credible)
+        tr_m, va_m, te_m = split_class(misinfo)
+
+        self.train = tr_c + tr_m
+        self.val = va_c + va_m
+        self.test = te_c + te_m
+        random.shuffle(self.train)
+        random.shuffle(self.val)
+        random.shuffle(self.test)
+        self.logger.info(
+            "Split: train=%d val=%d test=%d", len(self.train), len(self.val), len(self.test)
         )
 
-        # Compute val proportion relative to train_val size
-        relative_val = cfg.val_size / (1.0 - cfg.test_size)
-        train_df, val_df = train_test_split(
-            train_val_df,
-            test_size=relative_val,
-            random_state=cfg.random_state,
-            stratify=train_val_df["label"],
-        )
-
-        self._train_df = train_df.reset_index(drop=True)
-        self._val_df = val_df.reset_index(drop=True)
-        self._test_df = test_df.reset_index(drop=True)
-
-    @property
-    def train_df(self) -> pd.DataFrame:
-        assert self._train_df is not None
-        return self._train_df
-
-    @property
-    def val_df(self) -> pd.DataFrame:
-        assert self._val_df is not None
-        return self._val_df
-
-    @property
-    def test_df(self) -> pd.DataFrame:
-        assert self._test_df is not None
-        return self._test_df
-
-    # ----------------------------------------------------------------- sklearn
-    def to_sklearn(
-        self, split: str = "train"
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Return (texts, labels) numpy arrays for a given split.
+    def to_sklearn(self, split="train"):
+        """
+        Return texts and integer labels for sklearn-compatible usage.
 
         Args:
-            split: One of 'train', 'val', 'test'.
-
+            split (str): 'train', 'val', or 'test'
         Returns:
-            (X, y) where X is an array of texts, y is an array of int labels.
+            tuple: (texts list, labels list of int)
         """
-        if split == "train":
-            df = self.train_df
-        elif split == "val":
-            df = self.val_df
-        elif split == "test":
-            df = self.test_df
-        else:
-            raise ValueError("split must be one of 'train', 'val', 'test'.")
+        rows = getattr(self, split, [])
+        texts = [r["text"] for r in rows]
+        labels = [int(r["label"]) for r in rows]
+        return texts, labels
 
-        X = df["text"].astype(str).to_numpy()
-        y = df["label"].astype(int).to_numpy()
-        return X, y
-
-    # ----------------------------------------------------------------- SMOTE
-    def apply_smote(
-        self, X: np.ndarray, y: np.ndarray, random_state: int = 42
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Apply SMOTE oversampling to balance classes.
+    def to_torch(self, split="train"):
+        """
+        Return texts and integer labels for PyTorch DataLoader usage.
 
         Args:
-            X: Feature matrix or array of texts (will be treated as array-like).
-            y: Label array.
-            random_state: Random seed.
+            split (str): 'train', 'val', or 'test'
+        Returns:
+            list of (text, label) tuples
+        """
+        texts, labels = self.to_sklearn(split)
+        return list(zip(texts, labels))
+
+    def get_stats(self):
+        """
+        Return dataset statistics.
 
         Returns:
-            (X_res, y_res): Resampled arrays.
+            dict: total, credible, misinfo counts per split
         """
-        # For text we apply SMOTE on numeric features downstream; here we assume
-        # X is numerical (e.g. vectorized). This helper is primarily for that stage.
-        smote = SMOTE(random_state=random_state)
-        X_res, y_res = smote.fit_resample(X, y)
-        return X_res, y_res
 
-    # -------------------------------------------------------------- backtrans
-    def augment_backtranslation(
-        self, df: Optional[pd.DataFrame] = None, factor: float = 0.2
-    ) -> pd.DataFrame:
-        """Apply simple paraphrase-style augmentation.
+        def stats(rows):
+            total = len(rows)
+            credible = sum(1 for r in rows if int(r["label"]) == 0)
+            misinfo = total - credible
+            return {
+                "total": total,
+                "credible": credible,
+                "misinfo": misinfo,
+                "balance": round(credible / total, 3) if total else 0.0,
+            }
 
-        This is a lightweight stand-in for true EN→FR→EN back-translation.
-        For now, it duplicates a fraction of samples and applies trivial
-        transformations (e.g. adding a prefix), so the pipeline wiring
-        can be tested without external APIs.
+        return {
+            "train": stats(self.train),
+            "val": stats(self.val),
+            "test": stats(self.test),
+            "all": stats(self.df or []),
+        }
+
+    def create_synthetic(self, n_samples=200, seed=42):
+        """
+        Create a synthetic dataset for smoke tests and CI.
+
+        Generates simple keyword-based samples — not realistic, but
+        sufficient to verify model pipelines work end-to-end.
 
         Args:
-            df: DataFrame to augment (defaults to train_df).
-            factor: Fraction of rows to augment.
-
+            n_samples (int): total samples to generate
+            seed (int): random seed
         Returns:
-            Augmented DataFrame.
+            self: allows chaining
         """
-        if df is None:
-            df = self.train_df
-
-        n_aug = max(1, int(len(df) * factor))
-        subset = df.sample(n_aug, random_state=self.split_config.random_state)
-        aug = subset.copy()
-        aug["text"] = "[PARAPHRASE] " + aug["text"].astype(str)
-        return pd.concat([df, aug], ignore_index=True)
-
-    # --------------------------------------------------------------- PyTorch
-    def to_pytorch_dataset(self, split: str = "train", tokenizer=None, max_length: int = 512):
-        """Return a torch.utils.data.Dataset for a given split.
-
-        Args:
-            split: 'train', 'val', or 'test'.
-            tokenizer: HuggingFace tokenizer with __call__(text, ...) interface.
-            max_length: Max sequence length.
-
-        Returns:
-            torch.utils.data.Dataset instance.
-        """
-        if torch is None:
-            raise ImportError("PyTorch not installed.")
-
-        df = {"train": self.train_df, "val": self.val_df, "test": self.test_df}[split]
-
-        class _BertDataset(TorchDataset):
-            def __init__(self, frame: pd.DataFrame) -> None:
-                self.frame = frame.reset_index(drop=True)
-
-            def __len__(self) -> int:
-                return len(self.frame)
-
-            def __getitem__(self, idx: int) -> Dict[str, Any]:
-                row = self.frame.iloc[idx]
-                text = str(row["text"])
-                enc = tokenizer(
-                    text,
-                    truncation=True,
-                    padding="max_length",
-                    max_length=max_length,
-                    return_tensors="pt",
-                )
-                item = {
-                    "input_ids": enc["input_ids"].squeeze(0),
-                    "attention_mask": enc["attention_mask"].squeeze(0),
-                    "label": int(row["label"]),
+        random.seed(seed)
+        credible_phrases = [
+            "Scientists publish peer-reviewed study",
+            "According to official government data",
+            "Researchers at university confirm findings",
+            "Clinical trial shows moderate effect",
+            "Expert panel reviews evidence carefully",
+            "Statistical analysis of census data",
+            "Independent audit verifies results",
+            "Peer reviewed journal publishes findings",
+        ]
+        misinfo_phrases = [
+            "SHOCKING secret they do not want you to know",
+            "Doctors HATE this one weird trick",
+            "Government cover-up exposed by insiders",
+            "Scientists BAFFLED by miracle cure found",
+            "Mainstream media hiding the truth about",
+            "They are putting chemicals in the water",
+            "Illuminati controls all world governments",
+            "Vaccines contain microchips for tracking",
+        ]
+        rows = []
+        for i in range(n_samples // 2):
+            phrase = random.choice(credible_phrases)
+            rows.append(
+                {
+                    "text": "%s in study number %d." % (phrase, i),
+                    "label": 0,
+                    "category": "credible",
                 }
-                if "token_type_ids" in enc:
-                    item["token_type_ids"] = enc["token_type_ids"].squeeze(0)
-                return item
-
-        return _BertDataset(df)
-
-    # ------------------------------------------------------------- TensorFlow
-    def to_tensorflow_dataset(
-        self, split: str = "train", batch_size: int = 64
-    ) -> "tf.data.Dataset":
-        """Return a tf.data.Dataset for the given split.
-
-        Args:
-            split: 'train', 'val', or 'test'.
-            batch_size: Batch size.
-
-        Returns:
-            tf.data.Dataset of (text, label).
-        """
-        if tf is None:
-            raise ImportError("TensorFlow not installed.")
-
-        X, y = self.to_sklearn(split)
-        ds = tf.data.Dataset.from_tensor_slices(
-            (tf.constant(X, dtype=tf.string), tf.constant(y, dtype=tf.int32))
-        )
-        return ds.batch(batch_size)
+            )
+        for i in range(n_samples // 2):
+            phrase = random.choice(misinfo_phrases)
+            rows.append(
+                {
+                    "text": "%s claim number %d!" % (phrase, i),
+                    "label": 1,
+                    "category": "misinformation",
+                }
+            )
+        random.shuffle(rows)
+        self.df = rows
+        self._split()
+        self.logger.info("Synthetic dataset created: %d samples", len(rows))
+        return self

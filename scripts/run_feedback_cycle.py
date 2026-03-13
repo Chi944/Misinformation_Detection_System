@@ -1,44 +1,53 @@
-"""Run a single feedback cycle for the misinformation detector.
+import os
+import sys
+import argparse
 
-This script loads the detector, reads a small batch from ``data/sample_train.csv``,
-and executes one feedback loop cycle using the provided ground-truth labels.
-"""
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from __future__ import annotations
-
-from pathlib import Path
-
-import pandas as pd
-
+from src.utils.logger import get_logger
+from src.training.dataset import MisinformationDataset
 from src.detector import MisinformationDetector
 
+logger = get_logger("run_feedback_cycle")
 
-def main() -> None:
-    """Execute one feedback cycle on a small batch."""
 
-    data_path = Path("data/sample_train.csv")
-    if not data_path.exists():
-        raise SystemExit(
-            "data/sample_train.csv not found. Run scripts/download_sample_data.py first."
-        )
+def parse_args():
+    """Parse run_feedback_cycle.py arguments."""
+    parser = argparse.ArgumentParser(description="Run one backward propagation feedback cycle")
+    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--synthetic", action="store_true")
+    parser.add_argument("--n-samples", type=int, default=50)
+    return parser.parse_args()
 
-    df = pd.read_csv(data_path)
-    if "text" not in df or "label" not in df:
-        raise SystemExit("sample_train.csv must contain 'text' and 'label' columns.")
 
-    batch = df.sample(min(64, len(df)), random_state=42)
-    texts = batch["text"].astype(str).tolist()
-    labels = batch["label"].astype(int).tolist()
+def main():
+    """Run one feedback cycle on a batch of samples."""
+    args = parse_args()
+    logger.info("Starting run_feedback_cycle.py")
 
-    detector = MisinformationDetector(config="config.yaml", fast_mode=True)
-    loop = detector.feedback_loop
+    dataset = MisinformationDataset()
+    dataset.create_synthetic(n_samples=args.n_samples * 2)
+    texts, labels = dataset.to_sklearn("train")
+    batch = texts[: args.n_samples]
+    lbls = labels[: args.n_samples]
 
-    import asyncio
+    detector = MisinformationDetector(config=args.config, fast_mode=True)
 
-    summary = asyncio.run(loop.run_cycle(texts, labels))
-    print(f"Feedback cycle completed: {summary}")
+    if detector.feedback_loop is None:
+        logger.error("Feedback loop not initialised")
+        sys.exit(1)
+
+    logger.info("Running feedback cycle on %d samples", len(batch))
+    try:
+        metrics = detector.feedback_loop.run_cycle(batch, true_labels=lbls)
+        print("")
+        print("=== Feedback Cycle Complete ===")
+        print("Cycle metrics: %s" % metrics)
+        print("=== Done ===")
+    except Exception as e:
+        logger.error("Feedback cycle failed: %s", e)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
-

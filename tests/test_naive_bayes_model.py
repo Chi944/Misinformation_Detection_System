@@ -9,8 +9,7 @@ from src.models.naive_bayes_model import TFNaiveBayesWrapper
 
 
 def test_naive_bayes_can_be_constructed():
-    """Ensure the Naive Bayes wrapper can be instantiated with default config."""
+    """Ensure the Naive Bayes wrapper can be instantiated with defaults."""
 
-    model = TFNaiveBayesWrapper(config={})
+    model = TFNaiveBayesWrapper()
     assert model is not None
-

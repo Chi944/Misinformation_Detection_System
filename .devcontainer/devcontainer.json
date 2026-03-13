@@ -1,24 +1,32 @@
 {
-  "name": "Misinformation Detector",
-  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "name": "Misinformation Detector Dev",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
   "postCreateCommand": "bash .devcontainer/postCreateCommand.sh",
   "customizations": {
     "vscode": {
       "extensions": [
         "ms-python.python",
         "ms-python.black-formatter",
-        "ms-toolsai.jupyter",
-        "GitHub.copilot"
+        "ms-python.flake8",
+        "ms-toolsai.jupyter"
       ],
       "settings": {
         "python.defaultInterpreterPath": "/usr/local/bin/python",
-        "editor.formatOnSave": true
+        "editor.formatOnSave": true,
+        "python.formatting.provider": "black"
       }
     }
   },
+  "forwardPorts": [11434],
   "remoteEnv": {
-    "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}",
-    "PYTHONPATH": "${containerWorkspaceFolder}/src"
+    "PYTHONPATH": "${containerWorkspaceFolder}",
+    "TF_CPP_MIN_LOG_LEVEL": "3"
   },
-  "forwardPorts": [8080]
+  "mounts": [
+    "source=ollama-models,target=/root/.ollama,type=volume"
+  ]
 }

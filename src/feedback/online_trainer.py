@@ -1,178 +1,174 @@
-"""Online training utilities for feedback-driven updates.
-
-This module belongs to the *feedback* component of the pipeline. It provides
-lightweight update functions for BERT, TF-IDF, and Naive Bayes models that are
-invoked by the backward propagation feedback loop.
-"""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
-
+import logging
 import numpy as np
-
+import torch
+import torch.nn as nn
+from torch.optim import AdamW
 from src.utils.logger import get_logger
-
-LOGGER = get_logger(__name__)
-
-
-@dataclass
-class EWCState:
-    """Elastic Weight Consolidation state for BERT.
-
-    Component:
-        Feedback / OnlineTrainer.
-
-    Attributes:
-        params: Flattened parameter vector from the reference model.
-        fisher: Approximated Fisher information (same shape as params).
-    """
-
-    params: np.ndarray
-    fisher: np.ndarray
 
 
 class OnlineTrainer:
-    """Online trainer for incremental model updates.
+    """
+    Handles incremental model updates during feedback cycles.
 
-    This class owns references to the base models and encapsulates how they
-    are updated on high-error samples during feedback cycles.
+    Updates each of the 3 models on high-error samples only, using
+    techniques that prevent catastrophic forgetting:
+    - BERT: mini backward pass with EWC penalty and very low LR
+    - TF-IDF: Keras fit on error batch only
+    - Naive Bayes: sklearn partial_fit for true online learning
+
+    Part of the backward propagation feedback loop pipeline.
 
     Args:
-        bert_model: Trained BERT classifier (or ``None`` in fast mode).
-        tfidf_model: Trained TF-IDF DNN classifier.
-        nb_model: Trained Naive Bayes wrapper.
-        ewc_state: Optional pre-computed EWC state for BERT.
+        bert_model: BERTMisinformationClassifier instance
+        bert_tokenizer: HuggingFace tokenizer for BERT
+        tfidf_model: TFIDFModel instance
+        tfidf_vectorizer: fitted TfidfVectorizer
+        nb_model: fitted MultinomialNB (or CalibratedClassifierCV)
+        nb_vectorizer: fitted CountVectorizer for Naive Bayes
+        device (str): 'cuda' or 'cpu'
     """
 
     def __init__(
         self,
-        bert_model: Any | None,
-        tfidf_model: Any,
-        nb_model: Any,
-        ewc_state: EWCState | None = None,
-    ) -> None:
+        bert_model,
+        bert_tokenizer,
+        tfidf_model,
+        tfidf_vectorizer,
+        nb_model,
+        nb_vectorizer,
+        device="cpu",
+    ):
         self.bert_model = bert_model
+        self.bert_tokenizer = bert_tokenizer
         self.tfidf_model = tfidf_model
+        self.tfidf_vectorizer = tfidf_vectorizer
         self.nb_model = nb_model
-        self.ewc_state = ewc_state
+        self.nb_vectorizer = nb_vectorizer
+        self.device = device
+        self.logger = get_logger(__name__)
 
-    # ----------------------------------------------------------------- BERT EWC
-    def update_bert(
-        self,
-        error_batch: Sequence[Dict[str, Any]],
-        lr: float = 5e-6,
-        steps: int = 3,
-    ) -> None:
-        """Mini backward pass on high-error samples for BERT.
+        # Store initial BERT parameter values for EWC
+        self._ewc_params = {
+            name: param.clone().detach()
+            for name, param in bert_model.named_parameters()
+            if param.requires_grad
+        }
+        # Initialise Fisher information as ones (uniform importance)
+        self._ewc_fisher = {
+            name: torch.ones_like(param)
+            for name, param in bert_model.named_parameters()
+            if param.requires_grad
+        }
+
+    def _ewc_penalty(self, model) -> torch.Tensor:
+        """
+        Elastic Weight Consolidation penalty to prevent catastrophic
+        forgetting during incremental BERT updates.
+
+        Penalises large deviations from stored parameter values,
+        weighted by estimated Fisher information.
 
         Args:
-            error_batch: Sequence of dicts containing at least ``inputs`` and
-                ``true_label`` usable by the caller to prepare BERT batches.
-            lr: Learning rate for the update (default 5e-6).
-            steps: Number of gradient steps per call (default 3).
+            model: the BERT model being updated
+        Returns:
+            torch.Tensor: scalar EWC loss term
         """
+        penalty = torch.tensor(0.0, device=self.device)
+        for name, param in model.named_parameters():
+            if name in self._ewc_params:
+                stored = self._ewc_params[name].to(self.device)
+                fisher = self._ewc_fisher[name].to(self.device)
+                penalty = penalty + (fisher * (param - stored).pow(2)).sum()
+        return 0.5 * penalty
 
-        if self.bert_model is None or not error_batch:
+    def update_bert(self, error_batch, lr=5e-6, steps=3):
+        """
+        Mini backward pass on high-error samples to correct BERT weights.
+
+        Uses a very low learning rate and few gradient steps to avoid
+        catastrophic forgetting. EWC penalty protects important weights.
+
+        Args:
+            error_batch (list): list of (text, true_label) tuples
+            lr (float): learning rate, default 5e-6 (vs training 2e-5)
+            steps (int): gradient steps per call, default 3
+        """
+        if not error_batch:
             return
-
-        import torch
-
         self.bert_model.train()
-        device = next(self.bert_model.parameters()).device
-        optimizer = torch.optim.AdamW(self.bert_model.parameters(), lr=lr)
-        criterion = torch.nn.CrossEntropyLoss()
-
-        # Very lightweight loop: treat each sample individually.
-        for step, sample in enumerate(error_batch):
-            if step >= steps:
-                break
-            inputs = sample["inputs"]
-            labels = torch.tensor([int(sample["true_label"])], device=device)
-
-            optimizer.zero_grad()
-            outputs = self.bert_model(
-                input_ids=inputs["input_ids"].to(device),
-                attention_mask=inputs["attention_mask"].to(device),
-                token_type_ids=inputs.get("token_type_ids"),
-            )
-            loss = criterion(outputs, labels)
-
-            # EWC penalty towards stored parameters if available.
-            if self.ewc_state is not None:
-                params = torch.cat([p.view(-1) for p in self.bert_model.parameters()])
-                ref = torch.from_numpy(self.ewc_state.params).to(device)
-                fisher = torch.from_numpy(self.ewc_state.fisher).to(device)
-                ewc_penalty = torch.sum(fisher * (params - ref) ** 2)
-                loss = loss + 0.5 * ewc_penalty
-
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.bert_model.parameters(), max_norm=1.0)
-            optimizer.step()
-
-        self.bert_model.eval()
-        LOGGER.info("Online BERT update completed on %d samples.", min(len(error_batch), steps))
-
-    # ------------------------------------------------------------ TF-IDF update
-    def update_tfidf(
-        self,
-        error_batch: Sequence[Dict[str, Any]],
-        epochs: int = 2,
-    ) -> None:
-        """Incrementally update the TF-IDF DNN on high-error samples.
-
-        Args:
-            error_batch: Sequence of dicts containing ``text`` and ``true_label``.
-            epochs: Number of fit epochs on the error batch.
-        """
-
-        if not error_batch:
-            return
-
-        texts = [str(s["text"]) for s in error_batch]
-        labels = np.asarray([int(s["true_label"]) for s in error_batch], dtype="int32")
-
-        # Reuse existing vectoriser and model via the public fit interface.
-        # We call fit with a small number of epochs to avoid overfitting.
-        orig_epochs = getattr(self.tfidf_model, "epochs", epochs)
-        self.tfidf_model.epochs = epochs
-        self.tfidf_model.fit(texts, labels)
-        self.tfidf_model.epochs = orig_epochs
-
-        LOGGER.info("Online TF-IDF update completed on %d samples.", len(error_batch))
-
-    # --------------------------------------------------------- Naive Bayes perf
-    def update_naive_bayes(self, error_batch: Sequence[Dict[str, Any]]) -> None:
-        """Update the Naive Bayes model using partial_fit.
-
-        Args:
-            error_batch: Sequence of dicts containing ``text`` and ``true_label``.
-        """
-
-        if not error_batch:
-            return
-
-        texts = [str(s["text"]) for s in error_batch]
-        labels = np.asarray([int(s["true_label"]) for s in error_batch], dtype="int32")
-
-        # Vectorisation is handled inside the wrapper; we simply call fit/partial.
+        optimizer = AdamW([p for p in self.bert_model.parameters() if p.requires_grad], lr=lr)
+        criterion = nn.CrossEntropyLoss()
         try:
-            # If wrapper exposes partial_fit, use it for true online updates.
-            if hasattr(self.nb_model, "pipeline") and hasattr(
-                self.nb_model.pipeline.named_steps.get("clf"), "partial_fit"
-            ):
-                # Use predict_proba to force vectoriser initialisation if needed.
-                _ = self.nb_model.predict_proba_np(texts)
-                clf = self.nb_model.pipeline.named_steps["clf"]
-                vect = self.nb_model.pipeline.named_steps["vect"]
-                X = vect.transform(texts)
-                clf.partial_fit(X, labels, classes=np.array([0, 1], dtype="int32"))
-            else:
-                self.nb_model.fit(texts, labels)
-        except Exception:  # pragma: no cover - defensive
-            # Fall back to full fit if partial update fails.
-            self.nb_model.fit(texts, labels)
+            for _step in range(steps):
+                for text, label in error_batch:
+                    enc = self.bert_tokenizer(
+                        text,
+                        return_tensors="pt",
+                        max_length=512,
+                        truncation=True,
+                        padding=True,
+                    )
+                    enc = {k: v.to(self.device) for k, v in enc.items()}
+                    label_t = torch.tensor([int(label)], device=self.device)
+                    probs = self.bert_model(**enc)
+                    ce_loss = criterion(probs, label_t)
+                    ewc_loss = self._ewc_penalty(self.bert_model)
+                    loss = ce_loss + 0.1 * ewc_loss
+                    optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.bert_model.parameters(), max_norm=1.0)
+                    optimizer.step()
+            self.logger.info("BERT updated on %d samples, %d steps", len(error_batch), steps)
+        except Exception as e:
+            self.logger.warning("BERT update failed: %s", e)
+        finally:
+            self.bert_model.eval()
 
-        LOGGER.info("Online Naive Bayes update completed on %d samples.", len(error_batch))
+    def update_tfidf(self, error_batch, epochs=2):
+        """
+        Incremental TF-IDF model update on high-error samples.
 
+        Calls Keras model.fit() on the error batch only.
+        Fewer epochs and smaller batches prevent overfitting.
+
+        Args:
+            error_batch (list): list of (text, true_label) tuples
+            epochs (int): Keras training epochs, default 2
+        """
+        if not error_batch:
+            return
+        try:
+            texts, labels = zip(*error_batch)
+            X = self.tfidf_model.transform_features(list(texts))
+            y = np.array(labels, dtype=np.int32)
+            self.tfidf_model.model.fit(
+                X,
+                y,
+                epochs=epochs,
+                batch_size=max(4, len(error_batch)),
+                verbose=0,
+            )
+            self.logger.info("TF-IDF updated on %d samples, %d epochs", len(error_batch), epochs)
+        except Exception as e:
+            self.logger.warning("TF-IDF update failed: %s", e)
+
+    def update_naive_bayes(self, error_batch):
+        """
+        True online learning for Naive Bayes via sklearn partial_fit.
+
+        No full retraining needed — partial_fit updates the class
+        priors and likelihoods incrementally.
+
+        Args:
+            error_batch (list): list of (text, true_label) tuples
+        """
+        if not error_batch:
+            return
+        try:
+            texts, labels = zip(*error_batch)
+            X = self.nb_vectorizer.transform(list(texts))
+            y = np.array(labels, dtype=np.int32)
+            self.nb_model.partial_fit(X, y, classes=[0, 1])
+            self.logger.info("Naive Bayes partial_fit on %d samples", len(error_batch))
+        except Exception as e:
+            self.logger.warning("Naive Bayes update failed: %s", e)

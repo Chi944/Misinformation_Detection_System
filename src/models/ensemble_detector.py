@@ -15,7 +15,7 @@ import numpy as np
 
 from src.models.bert_classifier import BERTMisinformationClassifier
 from src.models.naive_bayes_model import TFNaiveBayesWrapper
-from src.models.tfidf_model import TfidfDNNClassifier
+from src.models.tfidf_model import TFIDFModel
 
 
 @dataclass
@@ -46,7 +46,7 @@ class EnsembleDetector:
     def __init__(
         self,
         bert_model: BERTMisinformationClassifier,
-        tfidf_model: TfidfDNNClassifier,
+        tfidf_model: TFIDFModel,
         nb_model: TFNaiveBayesWrapper,
         weights: Optional[EnsembleWeights] = None,
     ) -> None:
@@ -66,7 +66,8 @@ class EnsembleDetector:
               probabilities ``[p0, p1]`` for each model.
             - ``ensemble_probability``: Probability of class 1 (misinformation).
             - ``crisp_label``: ``"credible"`` or ``"misinformation"``.
-            - ``agreement``: Fraction of models that agree with ensemble label.
+            - ``model_agreement``: Fraction of models that agree with ensemble
+              label.
             - ``model_breakdown``: Per-model label and confidence.
             - ``ensemble_weights``: Current weights as a mapping.
         """
@@ -95,8 +96,16 @@ class EnsembleDetector:
         except Exception:  # pragma: no cover - environment dependent
             pass
 
-        tfidf_p = self.tfidf_model.predict_proba(texts)
-        nb_p = self.nb_model.predict_proba_np(texts)
+        if self.tfidf_model is not None:
+            tfidf_p = self.tfidf_model.predict_proba(texts)
+        else:
+            tfidf_p = np.array([[0.5, 0.5]], dtype="float32")
+
+        if self.nb_model is not None:
+            # Wrapper exposes a NumPy-based helper for probabilities
+            nb_p = self.nb_model.predict_proba_np(texts)
+        else:
+            nb_p = np.array([[0.5, 0.5]], dtype="float32")
 
         # Extract probability of class 1 for each model
         p1_bert = float(bert_p[0, 1])
@@ -104,9 +113,7 @@ class EnsembleDetector:
         p1_nb = float(nb_p[0, 1])
 
         weights = self.weights.as_array()
-        p1_ensemble = float(
-            weights[0] * p1_bert + weights[1] * p1_tfidf + weights[2] * p1_nb
-        )
+        p1_ensemble = float(weights[0] * p1_bert + weights[1] * p1_tfidf + weights[2] * p1_nb)
 
         crisp_label = "misinformation" if p1_ensemble >= 0.5 else "credible"
 
@@ -139,6 +146,7 @@ class EnsembleDetector:
             "naive_bayes_proba": nb_p[0].tolist(),
             "ensemble_probability": p1_ensemble,
             "crisp_label": crisp_label,
+            "model_agreement": agreement,
             "agreement": agreement,
             "model_breakdown": model_breakdown,
             "ensemble_weights": weights_dict,
@@ -166,4 +174,3 @@ class EnsembleDetector:
         self.weights.bert = float(norm[0])
         self.weights.tfidf = float(norm[1])
         self.weights.naive_bayes = float(norm[2])
-

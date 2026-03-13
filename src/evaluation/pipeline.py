@@ -1,127 +1,139 @@
-"""Evaluation pipeline orchestration.
-
-This module belongs to the *evaluation* component of the pipeline. It
-coordinates metric computation, optional LLM-based judging, and dashboard
-generation, and writes a JSON report to the reports directory.
-"""
-
-from __future__ import annotations
-
 import json
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
-
-import numpy as np
-
-from src.evaluation.llm_judge import LLMJudge
-from src.evaluation import dashboard, metrics as eval_metrics
+import os
+from src.evaluation.metrics import MetricsCalculator
 from src.utils.logger import get_logger
-
-LOGGER = get_logger(__name__)
 
 
 class EvaluationPipeline:
-    """End-to-end evaluation pipeline for the detector.
+    """
+    Orchestrates full model evaluation: metrics, LLM judge, dashboard.
+    Part of MisinformationDetector.
 
-    Component:
-        Evaluation / Pipeline.
+    Args:
+        detector: MisinformationDetector instance
+        config (dict): loaded config.yaml
     """
 
-    def __init__(
-        self,
-        detector,
-        judge: Optional[LLMJudge] = None,
-        output_dir: str | Path = "reports",
-    ) -> None:
+    def __init__(self, detector, config):
         self.detector = detector
-        self.judge = judge
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.config = config
+        self.calculator = MetricsCalculator()
+        self.output_dir = config.get("evaluation", {}).get("output_dir", "reports")
+        # Lazy import to avoid slow matplotlib import at module import time.
+        from src.evaluation.dashboard import EvaluationDashboard
 
-    def evaluate(
-        self,
-        texts: Sequence[str],
-        labels: Sequence[int],
-        use_llm_judge: bool = True,
-    ) -> Dict[str, Any]:
-        """Evaluate all models and optionally call the LLM judge.
+        self.dashboard = EvaluationDashboard(output_dir=self.output_dir)
+        self.logger = get_logger(__name__)
+        os.makedirs(self.output_dir, exist_ok=True)
+
+    def evaluate(self, dataset, use_llm_judge=True):
+        """
+        Run full evaluation pipeline.
 
         Args:
-            texts: Input texts.
-            labels: Ground-truth labels (0/1).
-            use_llm_judge: Whether to call the LLM judge.
-
+            dataset: MisinformationDataset or list of (text, label) tuples
+            use_llm_judge (bool): whether to call LLM judge
         Returns:
-            Dict with metrics, fuzzy stats, and optional LLM judge summary.
+            dict: full evaluation report
         """
+        self.logger.info("Starting evaluation (llm_judge=%s)", use_llm_judge)
+        texts, y_true, categories = self._unpack_dataset(dataset)
+        all_preds = [self.detector.predict(t) for t in texts]
+        eval_data = self._build_eval_data(all_preds, y_true)
 
-        y_true = np.asarray(list(labels), dtype=int)
-        probs_by_model: Dict[str, List[List[float]]] = {
-            "bert": [],
-            "tfidf": [],
-            "naive_bayes": [],
-            "ensemble": [],
-        }
-        fuzzy_scores: List[float] = []
-
-        for text in texts:
-            out = self.detector.predict(text)
-            mb = out["model_breakdown"]
-            probs_by_model["bert"].append(
-                [1.0 - mb["bert"]["confidence"], mb["bert"]["confidence"]]
-            )
-            probs_by_model["tfidf"].append(
-                [1.0 - mb["tfidf"]["confidence"], mb["tfidf"]["confidence"]]
-            )
-            probs_by_model["naive_bayes"].append(
-                [1.0 - mb["naive_bayes"]["confidence"], mb["naive_bayes"]["confidence"]]
-            )
-            probs_by_model["ensemble"].append(
-                [1.0 - out["ensemble_probability"], out["ensemble_probability"]]
-            )
-            fuzzy_scores.append(float(out["fuzzy_score"]))
-
-        probs_by_model_np = {k: np.asarray(v, dtype="float32") for k, v in probs_by_model.items()}
-        fuzzy_arr = np.asarray(fuzzy_scores, dtype="float32")
-
-        metrics_report = eval_metrics.classification_report(y_true, probs_by_model_np)
-        fuzzy_report = eval_metrics.fuzzy_metrics(y_true, fuzzy_arr)
-
-        llm_report: Dict[str, Any] = {}
-        if use_llm_judge and self.judge is not None:
-            dataset = []
-            for i, text in enumerate(texts):
-                dataset.append(
+        judge_metrics = {}
+        if use_llm_judge and self.detector.llm_judge is not None:
+            try:
+                fuzzy_scores = [
+                    self.detector.fuzzy_engine.compute(
+                        {
+                            "source_credibility": 0.5,
+                            "bert_confidence": p["model_breakdown"]["bert"]["confidence"],
+                            "tfidf_confidence": p["model_breakdown"]["tfidf"]["confidence"],
+                            "nb_confidence": p["model_breakdown"]["naive_bayes"]["confidence"],
+                            "model_agreement": p["model_agreement"],
+                            "feedback_score": 0.5,
+                        }
+                    )
+                    for p in all_preds
+                ]
+                preds_for_judge = [
                     {
-                        "text": text,
-                        "predictions": {
-                            "bert": probs_by_model_np["bert"][i].tolist(),
-                            "tfidf": probs_by_model_np["tfidf"][i].tolist(),
-                            "naive_bayes": probs_by_model_np["naive_bayes"][i].tolist(),
-                            "ensemble": probs_by_model_np["ensemble"][i].tolist(),
-                        },
-                        "fuzzy_score": float(fuzzy_arr[i]),
-                        "cycle_metrics": {},
+                        "bert": p["model_breakdown"]["bert"]["label"],
+                        "tfidf": p["model_breakdown"]["tfidf"]["label"],
+                        "naive_bayes": p["model_breakdown"]["naive_bayes"]["label"],
+                        "ensemble": p["crisp_label"],
                     }
+                    for p in all_preds
+                ]
+                judgments = self.detector.llm_judge.evaluate_batch(
+                    list(zip(texts, preds_for_judge, fuzzy_scores))
                 )
-            import asyncio
+                judge_metrics = self.calculator.compute_judge_metrics(judgments, y_true)
+                eval_data["judge_metrics"] = judge_metrics
+                eval_data["judge_report"] = self.detector.llm_judge.generate_model_report(judgments)
+            except Exception as e:
+                self.logger.warning("LLM judge failed: %s", e)
 
-            judgments = asyncio.run(self.judge.evaluate_batch(dataset))
-            llm_report = eval_metrics.llm_judge_metrics(judgments)
-        else:
-            judgments = []
-
-        # Render dashboard
-        dashboard.generate_dashboard(y_true, probs_by_model_np, fuzzy_arr, self.output_dir / "evaluation_dashboard.png")
+        model_metrics = {}
+        for name in ["bert", "tfidf", "naive_bayes", "ensemble"]:
+            data = eval_data["models"].get(name, {})
+            model_metrics[name] = self.calculator.compute_all(
+                name,
+                y_true,
+                data.get("y_pred", []),
+                data.get("y_prob"),
+                categories=categories,
+            )
 
         report = {
-            "metrics": metrics_report,
-            "fuzzy": fuzzy_report,
-            "llm_judge": llm_report,
+            "model_metrics": model_metrics,
+            "judge_metrics": judge_metrics,
+            "sample_count": len(texts),
         }
-        out_path = self.output_dir / "evaluation_report.json"
-        out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
-        LOGGER.info("Evaluation report written to %s", out_path)
+        report_path = os.path.join(self.output_dir, "evaluation_report.json")
+        with open(report_path, "w") as f:
+            json.dump(report, f, indent=2, default=str)
+        self.logger.info("Report saved to %s", report_path)
+
+        try:
+            self.dashboard.generate(eval_data)
+        except Exception as e:
+            self.logger.warning("Dashboard failed: %s", e)
+
         return report
 
+    def _unpack_dataset(self, dataset):
+        """Unpack dataset into texts, labels, categories."""
+        if hasattr(dataset, "df"):
+            df = dataset.df
+            cats = df["category"].tolist() if "category" in df.columns else None
+            return df["text"].tolist(), df["label"].tolist(), cats
+
+        texts, y_true, cats = [], [], []
+        for item in dataset:
+            if len(item) >= 3:
+                texts.append(item[0])
+                y_true.append(int(item[1]))
+                cats.append(item[2])
+            else:
+                texts.append(item[0])
+                y_true.append(int(item[1]))
+        return texts, y_true, cats if cats else None
+
+    def _build_eval_data(self, all_preds, y_true):
+        """Build eval_data dict for dashboard and metrics."""
+        eval_data = {"models": {}}
+        for name in ["bert", "tfidf", "naive_bayes"]:
+            eval_data["models"][name] = {
+                "y_true": y_true,
+                "y_pred": [p["model_breakdown"][name]["label"] for p in all_preds],
+                "y_prob": [p["model_breakdown"][name]["confidence"] for p in all_preds],
+            }
+        eval_data["models"]["ensemble"] = {
+            "y_true": y_true,
+            "y_pred": [1 if p["crisp_label"] == "misinformation" else 0 for p in all_preds],
+            "y_prob": [p["ensemble_probability"] for p in all_preds],
+        }
+        return eval_data

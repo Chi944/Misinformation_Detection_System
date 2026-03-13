@@ -37,6 +37,24 @@ llm_judge:
   max_retries: 3
   backoff_base: 2
 
+accuracy_gates:
+  bert:
+    accuracy: 0.78
+    precision: 0.76
+    f1: 0.77
+  tfidf:
+    accuracy: 0.76
+    precision: 0.75
+    f1: 0.75
+  naive_bayes:
+    accuracy: 0.75
+    precision: 0.75
+    f1: 0.74
+  ensemble:
+    accuracy: 0.82
+    precision: 0.80
+    f1: 0.81
+
 feedback:
   high_error_threshold: 0.25
   bert_update_lr: 5.0e-6

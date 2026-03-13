@@ -1,221 +1,86 @@
-# src/fuzzy/fuzzy_engine.py
-"""Fuzzy logic engine for misinformation scoring.
-
-This module belongs to the *fuzzy* component of the pipeline. It implements a
-Mamdani fuzzy inference system with centroid defuzzification over:
-
-- source_credibility
-- bert_confidence
-- tfidf_confidence
-- nb_confidence
-- model_agreement
-- feedback_score
-
-and produces a scalar misinfo_score in [0, 1].
-"""
-
 from __future__ import annotations
-
-from typing import Dict, Any
-
+import src.utils.skfuzzy_compat  # noqa: F401 — must be first, fixes Python 3.12
+import logging
 import numpy as np
 import skfuzzy as fuzz
-from skfuzzy import control as ctrl
+from src.utils.logger import get_logger
 
-from src.fuzzy.membership_functions import build_membership_functions
+LOGGER = get_logger(__name__)
 
 
 class FuzzyMisinformationEngine:
-    """Mamdani fuzzy inference engine for misinformation scoring.
+    """
+    Mamdani fuzzy inference engine for misinformation scoring.
 
-    This engine:
+    Implements 18 fuzzy rules across 6 input variables to produce a
+    continuous misinformation score in [0.0, 1.0].
 
-    - Loads antecedents and consequent from `build_membership_functions()`.
-    - Defines 18 fuzzy rules (strong misinformation, strong credibility,
-      suspicious/uncertain, feedback-adjusted).
-    - Uses centroid defuzzification on `misinfo_score`.
+    Uses pure manual Mamdani inference (fuzz.interp_membership +
+    fuzz.defuzz) instead of skfuzzy ControlSystem, which is unstable
+    under Python 3.12 with scikit-fuzzy 0.4.2.
 
-    Attributes:
-        threshold_suspicious: Float in [0,1] for suspicious cut-off.
-        threshold_misinformation: Float in [0,1] for misinformation cut-off.
-
-    Component:
-        Fuzzy / Engine.
+    Part of the ensemble prediction pipeline in MisinformationDetector.
     """
 
+    UNIVERSE = np.arange(0.0, 1.01, 0.01)
+
+    # Triangular MF parameters: [left, center, right]
+    LOW_PARAMS = [0.0, 0.0, 0.45]
+    MEDIUM_PARAMS = [0.35, 0.5, 0.65]
+    HIGH_PARAMS = [0.55, 1.0, 1.0]
+
+    # Trapezoidal output MF parameters: [a, b, c, d]
+    CREDIBLE_PARAMS = [0.0, 0.0, 0.25, 0.40]
+    SUSPICIOUS_PARAMS = [0.30, 0.45, 0.55, 0.70]
+    MISINFORMATION_PARAMS = [0.60, 0.75, 1.0, 1.0]
+
     def __init__(self) -> None:
-        terms = build_membership_functions()
-        self.source_cred = terms["source_credibility"]
-        self.bert_conf = terms["bert_confidence"]
-        self.tfidf_conf = terms["tfidf_confidence"]
-        self.nb_conf = terms["nb_confidence"]
-        self.model_agree = terms["model_agreement"]
-        self.feedback_score = terms["feedback_score"]
-        self.misinfo_score = terms["misinfo_score"]
+        """
+        Initialise the fuzzy engine.
 
-        self._control_system = self._build_control_system()
-        self._sim = ctrl.ControlSystemSimulation(self._control_system)
+        Pre-computes all membership function arrays for performance and sets
+        mutable threshold attributes used by the feedback loop.
+        """
+        u = self.UNIVERSE
 
-        # Mutable thresholds for feedback loop
+        # Pre-compute input MFs
+        self._low_mf = fuzz.trimf(u, self.LOW_PARAMS)
+        self._medium_mf = fuzz.trimf(u, self.MEDIUM_PARAMS)
+        self._high_mf = fuzz.trimf(u, self.HIGH_PARAMS)
+
+        # Pre-compute output MFs
+        self._credible_mf = fuzz.trapmf(u, self.CREDIBLE_PARAMS)
+        self._suspicious_mf = fuzz.trapmf(u, self.SUSPICIOUS_PARAMS)
+        self._misinformation_mf = fuzz.trapmf(u, self.MISINFORMATION_PARAMS)
+
+        # Mutable thresholds — updated by feedback loop hill climbing
         self.threshold_suspicious: float = 0.45
         self.threshold_misinformation: float = 0.65
 
-    # ---------------------------------------------------------------- rules
-    def _build_control_system(self) -> ctrl.ControlSystem:
-        """Define all 18 fuzzy rules and return a ControlSystem."""
+        LOGGER.info("FuzzyMisinformationEngine initialised (manual Mamdani)")
 
-        s_cred = self.source_cred
-        b_conf = self.bert_conf
-        t_conf = self.tfidf_conf
-        n_conf = self.nb_conf
-        m_agree = self.model_agree
-        f_score = self.feedback_score
-        mis = self.misinfo_score
-
-        rules = []
-
-        # STRONG MISINFORMATION
-        # 1. source_cred LOW  AND bert_conf HIGH        → misinformation
-        rules.append(
-            ctrl.Rule(
-                s_cred["low"] & b_conf["high"],
-                mis["misinformation"],
-            )
-        )
-        # 2. model_agree HIGH AND bert_conf HIGH AND tfidf_conf HIGH → misinformation
-        rules.append(
-            ctrl.Rule(
-                m_agree["high"] & b_conf["high"] & t_conf["high"],
-                mis["misinformation"],
-            )
-        )
-        # 3. source_cred LOW  AND model_agree HIGH       → misinformation
-        rules.append(
-            ctrl.Rule(
-                s_cred["low"] & m_agree["high"],
-                mis["misinformation"],
-            )
-        )
-        # 4. bert_conf HIGH   AND tfidf_conf HIGH        → misinformation
-        rules.append(
-            ctrl.Rule(
-                b_conf["high"] & t_conf["high"],
-                mis["misinformation"],
-            )
-        )
-        # 5. feedback_score HIGH AND bert_conf HIGH      → misinformation
-        rules.append(
-            ctrl.Rule(
-                f_score["high"] & b_conf["high"],
-                mis["misinformation"],
-            )
-        )
-
-        # STRONG CREDIBILITY
-        # 6. source_cred HIGH AND bert_conf LOW          → credible
-        rules.append(
-            ctrl.Rule(
-                s_cred["high"] & b_conf["low"],
-                mis["credible"],
-            )
-        )
-        # 7. source_cred HIGH AND model_agree HIGH AND nb_conf LOW → credible
-        rules.append(
-            ctrl.Rule(
-                s_cred["high"] & m_agree["high"] & n_conf["low"],
-                mis["credible"],
-            )
-        )
-        # 8. source_cred HIGH AND tfidf_conf LOW         → credible
-        rules.append(
-            ctrl.Rule(
-                s_cred["high"] & t_conf["low"],
-                mis["credible"],
-            )
-        )
-        # 9. feedback_score LOW AND source_cred HIGH     → credible
-        rules.append(
-            ctrl.Rule(
-                f_score["low"] & s_cred["high"],
-                mis["credible"],
-            )
-        )
-
-        # SUSPICIOUS / UNCERTAIN
-        # 10. model_agree LOW                            → suspicious
-        rules.append(
-            ctrl.Rule(
-                m_agree["low"],
-                mis["suspicious"],
-            )
-        )
-        # 11. source_cred MEDIUM AND bert_conf MEDIUM    → suspicious
-        rules.append(
-            ctrl.Rule(
-                s_cred["medium"] & b_conf["medium"],
-                mis["suspicious"],
-            )
-        )
-        # 12. bert_conf MEDIUM AND tfidf_conf MEDIUM     → suspicious
-        rules.append(
-            ctrl.Rule(
-                b_conf["medium"] & t_conf["medium"],
-                mis["suspicious"],
-            )
-        )
-        # 13. nb_conf MEDIUM AND model_agree MEDIUM      → suspicious
-        rules.append(
-            ctrl.Rule(
-                n_conf["medium"] & m_agree["medium"],
-                mis["suspicious"],
-            )
-        )
-        # 14. source_cred LOW AND bert_conf MEDIUM       → suspicious
-        rules.append(
-            ctrl.Rule(
-                s_cred["low"] & b_conf["medium"],
-                mis["suspicious"],
-            )
-        )
-        # 15. feedback_score MEDIUM AND model_agree MEDIUM → suspicious
-        rules.append(
-            ctrl.Rule(
-                f_score["medium"] & m_agree["medium"],
-                mis["suspicious"],
-            )
-        )
-
-        # FEEDBACK-ADJUSTED
-        # 16. feedback_score HIGH AND source_cred MEDIUM → misinformation
-        rules.append(
-            ctrl.Rule(
-                f_score["high"] & s_cred["medium"],
-                mis["misinformation"],
-            )
-        )
-        # 17. feedback_score LOW AND model_agree HIGH AND source_cred MEDIUM → credible
-        rules.append(
-            ctrl.Rule(
-                f_score["low"] & m_agree["high"] & s_cred["medium"],
-                mis["credible"],
-            )
-        )
-        # 18. bert_conf LOW AND tfidf_conf LOW AND nb_conf LOW → credible
-        rules.append(
-            ctrl.Rule(
-                b_conf["low"] & t_conf["low"] & n_conf["low"],
-                mis["credible"],
-            )
-        )
-
-        return ctrl.ControlSystem(rules)
-
-    # ---------------------------------------------------------------- compute
-    def compute(self, inputs: Dict[str, Any]) -> float:
-        """Compute defuzzified misinfo_score from crisp inputs.
+    def _membership(self, value: float, mf_array: np.ndarray) -> float:
+        """
+        Compute membership degree of a crisp value in a pre-computed MF.
 
         Args:
-            inputs: Dict with keys:
+            value: Crisp input value, will be clipped to (0.001, 0.999).
+            mf_array: Pre-computed membership function array.
+
+        Returns:
+            float: Membership degree in [0.0, 1.0].
+        """
+        clipped = float(np.clip(value, 0.001, 0.999))
+        return float(fuzz.interp_membership(self.UNIVERSE, mf_array, clipped))
+
+    def compute(self, inputs: dict) -> float:
+        """
+        Run manual Mamdani fuzzy inference and return a defuzzified score.
+
+        Args:
+            inputs: Dictionary with any of these keys (missing keys default to
+                0.5):
+
                 - source_credibility
                 - bert_confidence
                 - tfidf_confidence
@@ -224,38 +89,104 @@ class FuzzyMisinformationEngine:
                 - feedback_score
 
         Returns:
-            float: misinfo_score in [0.0, 1.0].
+            float: Misinformation score in [0.0, 1.0]:
+
+                - 0.0 → definitely credible
+                - 1.0 → definitely misinformation
+                - 0.5 → uncertain / fallback on error
         """
-        # Clip all inputs to [0, 1]
-        def _clip(v: Any) -> float:
-            try:
-                x = float(v)
-            except Exception:
-                x = 0.0
-            return max(0.0, min(1.0, x))
+        try:
+            return self._manual_compute(inputs)
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.warning("Fuzzy compute failed (%s), returning 0.5", exc)
+            return 0.5
 
-        vals = {
-            "source_credibility": _clip(inputs.get("source_credibility", 0.5)),
-            "bert_confidence": _clip(inputs.get("bert_confidence", 0.5)),
-            "tfidf_confidence": _clip(inputs.get("tfidf_confidence", 0.5)),
-            "nb_confidence": _clip(inputs.get("nb_confidence", 0.5)),
-            "model_agreement": _clip(inputs.get("model_agreement", 0.5)),
-            "feedback_score": _clip(inputs.get("feedback_score", 0.5)),
-        }
+    def _manual_compute(self, inputs: dict) -> float:
+        """
+        Core manual Mamdani implementation.
 
-        # Reset simulation and set inputs
-        self._sim = ctrl.ControlSystemSimulation(self._control_system)
-        self._sim.input["source_credibility"] = vals["source_credibility"]
-        self._sim.input["bert_confidence"] = vals["bert_confidence"]
-        self._sim.input["tfidf_confidence"] = vals["tfidf_confidence"]
-        self._sim.input["nb_confidence"] = vals["nb_confidence"]
-        self._sim.input["model_agreement"] = vals["model_agreement"]
-        self._sim.input["feedback_score"] = vals["feedback_score"]
+        Evaluates all 18 rules and defuzzifies with the centroid method.
 
-        self._sim.compute()
-        score = float(self._sim.output["misinfo_score"])
+        Args:
+            inputs: Dictionary of input variable values.
 
-        # Ensure numeric and clipped
-        if np.isnan(score):  # pragma: no cover
-            score = 0.5
-        return max(0.0, min(1.0, score))
+        Returns:
+            float: Defuzzified misinfo_score in [0.0, 1.0].
+        """
+        # Extract inputs with neutral 0.5 default for missing keys
+        s = float(inputs.get("source_credibility", 0.5))
+        b = float(inputs.get("bert_confidence", 0.5))
+        t = float(inputs.get("tfidf_confidence", 0.5))
+        n = float(inputs.get("nb_confidence", 0.5))
+        a = float(inputs.get("model_agreement", 0.5))
+        f = float(inputs.get("feedback_score", 0.5))
+
+        # Compute membership degrees for each input variable
+        s_low = self._membership(s, self._low_mf)
+        s_med = self._membership(s, self._medium_mf)
+        s_high = self._membership(s, self._high_mf)
+
+        b_low = self._membership(b, self._low_mf)
+        b_med = self._membership(b, self._medium_mf)
+        b_high = self._membership(b, self._high_mf)
+
+        t_low = self._membership(t, self._low_mf)
+        t_med = self._membership(t, self._medium_mf)
+        t_high = self._membership(t, self._high_mf)
+
+        n_low = self._membership(n, self._low_mf)
+        n_med = self._membership(n, self._medium_mf)
+
+        a_low = self._membership(a, self._low_mf)
+        a_med = self._membership(a, self._medium_mf)
+        a_high = self._membership(a, self._high_mf)
+
+        f_low = self._membership(f, self._low_mf)
+        f_med = self._membership(f, self._medium_mf)
+        f_high = self._membership(f, self._high_mf)
+
+        # STRONG MISINFORMATION RULES (1–5 + 16)
+        misinfo_strength = max(
+            min(s_low, b_high),  # 1
+            min(a_high, b_high, t_high),  # 2
+            min(s_low, a_high),  # 3
+            min(b_high, t_high),  # 4
+            min(f_high, b_high),  # 5
+            min(f_high, s_med),  # 16
+        )
+
+        # STRONG CREDIBILITY RULES (6–9 + 17 + 18)
+        credible_strength = max(
+            min(s_high, b_low),  # 6
+            min(s_high, a_high, n_low),  # 7
+            min(s_high, t_low),  # 8
+            min(f_low, s_high),  # 9
+            min(f_low, a_high, s_med),  # 17
+            min(b_low, t_low, n_low),  # 18
+        )
+
+        # SUSPICIOUS RULES (10–15)
+        suspicious_strength = max(
+            a_low,  # 10
+            min(s_med, b_med),  # 11
+            min(b_med, t_med),  # 12
+            min(n_med, a_med),  # 13
+            min(s_low, b_med),  # 14
+            min(f_med, a_med),  # 15
+        )
+
+        # MAMDANI IMPLICATION
+        misinfo_clipped = np.fmin(misinfo_strength, self._misinformation_mf)
+        credible_clipped = np.fmin(credible_strength, self._credible_mf)
+        suspicious_clipped = np.fmin(suspicious_strength, self._suspicious_mf)
+
+        # AGGREGATION
+        aggregated = np.fmax(misinfo_clipped, np.fmax(credible_clipped, suspicious_clipped))
+
+        # DEFUZZIFICATION
+        if aggregated.sum() == 0:
+            LOGGER.debug("Empty aggregate MF, returning 0.5")
+            return 0.5
+
+        result = fuzz.defuzz(self.UNIVERSE, aggregated, "centroid")
+        return float(np.clip(result, 0.0, 1.0))

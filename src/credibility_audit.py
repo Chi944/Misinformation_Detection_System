@@ -14,11 +14,32 @@ from src.config import DATA_DIR
 
 # Sensational / clickbait-style terms (push toward misinformation)
 SENSATIONAL_WORDS = {
-    "breaking", "shocking", "exposed", "secret", "bombshell", "urgent",
-    "alert", "revealed", "truth", "lying", "cover-up", "censored",
-    "won't believe", "must read", "you won't believe", "they don't want",
-    "wake up", "conspiracy", "proof", "insider", "mainstream media",
-    "bombshell", "devastating", "explosive", "stunning", "outrageous",
+    "breaking",
+    "shocking",
+    "exposed",
+    "secret",
+    "bombshell",
+    "urgent",
+    "alert",
+    "revealed",
+    "truth",
+    "lying",
+    "cover-up",
+    "censored",
+    "won't believe",
+    "must read",
+    "you won't believe",
+    "they don't want",
+    "wake up",
+    "conspiracy",
+    "proof",
+    "insider",
+    "mainstream media",
+    "bombshell",
+    "devastating",
+    "explosive",
+    "stunning",
+    "outrageous",
 }
 
 # Simplified political bias indicators (illustrative; not comprehensive)
@@ -27,12 +48,23 @@ BIAS_RIGHT_INDICATORS = {"republican", "conservative", "alt-right", "trump"}
 
 # Sample domain credibility (extend for production)
 TRUSTED_DOMAINS = {
-    "reuters.com", "apnews.com", "bbc.com", "npr.org", "pbs.org",
-    "nytimes.com", "washingtonpost.com", "theguardian.com", "nature.com",
-    "science.org", "gov", "edu",
+    "reuters.com",
+    "apnews.com",
+    "bbc.com",
+    "npr.org",
+    "pbs.org",
+    "nytimes.com",
+    "washingtonpost.com",
+    "theguardian.com",
+    "nature.com",
+    "science.org",
+    "gov",
+    "edu",
 }
 UNTRUSTED_DOMAINS = {
-    "blogspot.com", "wordpress.com", "tumblr.com",  # generic blogs
+    "blogspot.com",
+    "wordpress.com",
+    "tumblr.com",  # generic blogs
 }
 
 # NewsGuard-style domain reputation database (loaded from data/domain_reputation.json)
@@ -230,11 +262,13 @@ def extract_flagged_terms(
             )
             if is_flagged and term and term.lower() not in seen:
                 seen.add(term.lower())
-                flagged.append({
-                    "term": term,
-                    "weight": round(abs(float(weight)), 4),
-                    "reason": "model_contribution",
-                })
+                flagged.append(
+                    {
+                        "term": term,
+                        "weight": round(abs(float(weight)), 4),
+                        "reason": "model_contribution",
+                    }
+                )
 
     if sensational_words:
         words = re.findall(r"\w+", text)
@@ -242,11 +276,13 @@ def extract_flagged_terms(
             wl = w.lower()
             if wl in SENSATIONAL_WORDS and wl not in seen:
                 seen.add(wl)
-                flagged.append({
-                    "term": w,
-                    "weight": 0.5,
-                    "reason": "sensational",
-                })
+                flagged.append(
+                    {
+                        "term": w,
+                        "weight": 0.5,
+                        "reason": "sensational",
+                    }
+                )
 
     return flagged[:20]
 
@@ -276,11 +312,15 @@ def run_credibility_audit(
     audit = {
         "sensationalism": sensationalism,
         "political_bias": political_bias,
-        "source_credibility": source_cred if source_cred else {
-            "score": None,
-            "domain": None,
-            "tier": "n/a",
-        },
+        "source_credibility": (
+            source_cred
+            if source_cred
+            else {
+                "score": None,
+                "domain": None,
+                "tier": "n/a",
+            }
+        ),
         "factuality_index": factuality,
         "flagged_terms": flagged_terms,
         "lexical_diversity": lexical_diversity,

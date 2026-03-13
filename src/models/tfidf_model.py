@@ -1,19 +1,37 @@
-"""TF-IDF + neural network model for misinformation detection.
+"""TF‑IDF + feature‑rich neural model for misinformation detection.
 
-This module belongs to the *models* component of the pipeline. It implements a
-compact TensorFlow/Keras classifier on top of TF-IDF features and saves its
-artefacts to disk so that other components (e.g. the ensemble and detector)
-can reuse them.
+This module implements :class:`TFIDFModel`, a TensorFlow/Keras classifier that
+operates on a concatenation of several feature families:
 
-Design goals:
+- Word‑level TF‑IDF features produced by :class:`TfidfVectorizer` with
+  ``ngram_range=(1, 3)`` and ``max_features=100000``.
+- Character‑level TF‑IDF features with ``ngram_range=(2, 4)``.
+- Hand‑crafted numeric features describing each input document:
 
-- Minimal dependencies beyond TensorFlow, NumPy, and scikit-learn.
-- Fast training on ``data/sample_train.csv``.
-- Simple API: ``fit(X, y)`` and ``predict_proba(X)``.
+  - Part‑of‑speech (POS) tag ratios (heuristically approximated).
+  - Sentence length.
+  - Punctuation density.
+  - Capitalisation ratio.
+
+The final feature vector is fed into a Keras ``Sequential`` network with the
+following architecture::
+
+    Dense(512, relu, L2=0.001) → BatchNorm → Dropout(0.4)
+    Dense(256, relu, L2=0.001) → BatchNorm → Dropout(0.3)
+    Dense(128, relu) → Dropout(0.2)
+    Dense(64, relu)
+    Dense(2, softmax)
+
+The model is compiled with ``Adam(lr=1e-3)``, sparse categorical
+cross‑entropy, and the metrics *accuracy* and *AUC*.  Early stopping and
+learning‑rate reduction callbacks are configured as specified in the overall
+design.
 """
 
 from __future__ import annotations
 
+import re
+import string
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -21,93 +39,122 @@ import joblib
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-try:
+try:  # pragma: no cover
     import tensorflow as tf
-    from tensorflow.keras import layers, models, optimizers
-except ImportError:  # pragma: no cover
-    tf = None  # type: ignore
-    layers = models = optimizers = None  # type: ignore
+    from tensorflow.keras import Sequential
+    from tensorflow.keras import layers, optimizers, regularizers
+except Exception:  # pragma: no cover
+    tf = None  # type: ignore[assignment]
+    Sequential = None  # type: ignore[assignment]
+    layers = optimizers = regularizers = None  # type: ignore[assignment]
 
 
-class TfidfDNNClassifier:
-    """TF-IDF + DNN classifier for misinformation detection.
+class TFIDFModel:
+    """TF‑IDF + dense neural network for misinformation detection.
 
-    This classifier builds a pair of TF-IDF vectorizers (word and character
-    n-grams), concatenates their outputs, and feeds them into a small fully
-    connected neural network implemented in Keras.
+    This model builds word‑ and character‑level TF‑IDF vectorisers, extracts a
+    small set of additional numeric features per document, concatenates
+    everything into a single dense feature matrix and trains a Keras
+    ``Sequential`` classifier on top.
 
     Args:
-        config:
-            Optional configuration dictionary. Recognised keys:
-
-            - ``max_features`` (int): Max word TF-IDF features.
-            - ``ngram_range`` (tuple[int, int]): Word n-gram range.
-            - ``char_ngram_range`` (tuple[int, int]): Character n-gram range.
-            - ``epochs`` (int): Training epochs.
-            - ``learning_rate`` (float): Adam learning rate.
-            - ``dropout`` (float): Dropout rate in hidden layers.
-        models_dir:
-            Directory where artefacts (TF-IDF vectorizers and Keras model) will
-            be saved.
+        models_dir: Directory where artefacts will be written.
+        max_features: Maximum number of word‑level TF‑IDF features.
+        ngram_range: Word n‑gram range for the TF‑IDF vectoriser.
+        char_ngram_range: Character n‑gram range for the char‑level vectoriser.
+        learning_rate: Learning rate for the Adam optimiser.
+        epochs: Maximum number of training epochs.
     """
 
     def __init__(
         self,
-        config: Optional[Dict[str, Any]] = None,
         models_dir: str | Path = "models",
+        max_features: int = 100_000,
+        ngram_range: Tuple[int, int] = (1, 3),
+        char_ngram_range: Tuple[int, int] = (2, 4),
+        learning_rate: float = 1e-3,
+        epochs: int = 20,
     ) -> None:
-        if tf is None:
-            raise ImportError("TensorFlow is required for TfidfDNNClassifier.")
+        if tf is None:  # pragma: no cover
+            raise ImportError("TensorFlow is required to use TFIDFModel.")
 
-        self.config = config or {}
         self.models_dir = Path(models_dir)
         self.models_dir.mkdir(parents=True, exist_ok=True)
 
-        self.max_features = int(self.config.get("max_features", 100_000))
-        self.ngram_range: Tuple[int, int] = tuple(
-            self.config.get("ngram_range", (1, 3))
-        )  # type: ignore[arg-type]
-        self.char_ngram_range: Tuple[int, int] = tuple(
-            self.config.get("char_ngram_range", (2, 4))
-        )  # type: ignore[arg-type]
-
-        self.epochs = int(self.config.get("epochs", 10))
-        self.learning_rate = float(self.config.get("learning_rate", 1e-3))
-        self.dropout = float(self.config.get("dropout", 0.4))
+        self.max_features = max_features
+        self.ngram_range = ngram_range
+        self.char_ngram_range = char_ngram_range
+        self.learning_rate = learning_rate
+        self.epochs = epochs
 
         self.word_vectorizer = TfidfVectorizer(
             max_features=self.max_features,
             ngram_range=self.ngram_range,
+            sublinear_tf=True,
+            min_df=2,
+            analyzer="word",
         )
         self.char_vectorizer = TfidfVectorizer(
             max_features=self.max_features // 2,
-            analyzer="char",
             ngram_range=self.char_ngram_range,
+            analyzer="char",
+            sublinear_tf=True,
+            min_df=2,
         )
 
         self.model: Optional["tf.keras.Model"] = None
 
-    # ----------------------------------------------------------------- building
-    def _build_model(self, input_dim: int) -> "tf.keras.Model":
-        """Build a small feed-forward Keras model."""
+    # ----------------------------------------------------------------- paths
+    @property
+    def model_dir(self) -> Path:
+        """Directory that will hold the trained Keras model."""
 
-        inputs = layers.Input(shape=(input_dim,), name="tfidf_input")
-        x = layers.Dense(256, activation="relu")(inputs)
-        x = layers.Dropout(self.dropout)(x)
-        x = layers.Dense(128, activation="relu")(x)
-        x = layers.Dropout(self.dropout)(x)
-        outputs = layers.Dense(1, activation="sigmoid")(x)
-        model = models.Model(inputs=inputs, outputs=outputs, name="tfidf_dnn")
-        model.compile(
-            optimizer=optimizers.Adam(learning_rate=self.learning_rate),
-            loss="binary_crossentropy",
-            metrics=["accuracy"],
-        )
-        return model
+        return self.models_dir / "tfidf_keras_model"
 
-    # ------------------------------------------------------------------ helpers
+    @property
+    def vectorizer_path(self) -> Path:
+        """Path where the fitted TF‑IDF vectorisers are stored."""
+
+        return self.models_dir / "tfidf_vectorizer.pkl"
+
+    # ----------------------------------------------------------------- helpers
+    @staticmethod
+    def _extra_features(texts: List[str]) -> np.ndarray:
+        """Compute lightweight numeric features for each text sample."""
+
+        feat_rows: List[List[float]] = []
+        punct_set = set(string.punctuation)
+
+        for txt in texts:
+            s = txt or ""
+            chars = max(1, len(s))
+            tokens = re.findall(r"\w+", s)
+            n_tokens = max(1, len(tokens))
+
+            punct = sum(1 for ch in s if ch in punct_set)
+            upper = sum(1 for ch in s if ch.isupper())
+            alpha = sum(1 for ch in s if ch.isalpha())
+
+            # Heuristic POS‑like counts based on simple suffixes.
+            nouns = sum(1 for t in tokens if t.lower().endswith(("ion", "ment", "ness")))
+            verbs = sum(1 for t in tokens if t.lower().endswith(("ing", "ed")))
+            adjs = sum(1 for t in tokens if t.lower().endswith(("ive", "ous", "ful")))
+
+            feat_rows.append(
+                [
+                    float(n_tokens),  # sentence length (tokens)
+                    float(punct) / float(chars),  # punctuation density
+                    float(upper) / float(max(1, alpha)),  # capitalisation ratio
+                    float(nouns) / float(n_tokens),  # noun‑like ratio
+                    float(verbs) / float(n_tokens),  # verb‑like ratio
+                    float(adjs) / float(n_tokens),  # adjective‑like ratio
+                ]
+            )
+
+        return np.asarray(feat_rows, dtype="float32")
+
     def _vectorise(self, X: Iterable[str], fit: bool = False) -> np.ndarray:
-        """Vectorise raw text using word and character TF-IDF."""
+        """Vectorise raw texts and append engineered numeric features."""
 
         texts: List[str] = [str(t) for t in X]
         if fit:
@@ -117,73 +164,101 @@ class TfidfDNNClassifier:
             X_word = self.word_vectorizer.transform(texts)
             X_char = self.char_vectorizer.transform(texts)
 
-        # Concatenate sparse matrices then convert to dense float32.
-        from scipy.sparse import hstack  # local import to avoid hard dependency
+        from scipy.sparse import hstack  # local import
 
-        X_combined = hstack([X_word, X_char]).astype("float32")
-        return X_combined.toarray()
+        tfidf_sparse = hstack([X_word, X_char]).astype("float32")
+        tfidf_dense = tfidf_sparse.toarray()
+        extra = self._extra_features(texts)
+        return np.concatenate([tfidf_dense, extra], axis=1)
 
-    # ------------------------------------------------------------------ training
+    def _build_model(self, input_dim: int) -> "tf.keras.Model":
+        """Construct and compile the Keras classifier for the given input size."""
+
+        l2 = regularizers.l2(0.001)
+        model = Sequential(
+            [
+                layers.Input(shape=(input_dim,)),
+                layers.Dense(512, activation="relu", kernel_regularizer=l2),
+                layers.BatchNormalization(),
+                layers.Dropout(0.4),
+                layers.Dense(256, activation="relu", kernel_regularizer=l2),
+                layers.BatchNormalization(),
+                layers.Dropout(0.3),
+                layers.Dense(128, activation="relu"),
+                layers.Dropout(0.2),
+                layers.Dense(64, activation="relu"),
+                layers.Dense(2, activation="softmax"),
+            ]
+        )
+
+        optimizer = optimizers.Adam(learning_rate=self.learning_rate)
+        model.compile(
+            optimizer=optimizer,
+            loss="sparse_categorical_crossentropy",
+            metrics=["accuracy", tf.keras.metrics.AUC(name="auc")],
+        )
+        return model
+
+    # ---------------------------------------------------------------- training
     def fit(self, X: Iterable[str], y: Iterable[int]) -> Dict[str, Any]:
-        """Fit TF-IDF vectorisers and the Keras classifier.
+        """Fit TF‑IDF vectorisers and train the Keras classifier.
 
-        Args:
-            X: Iterable of raw text samples.
-            y: Iterable of integer labels.
-
-        Returns:
-            dict: Training history (epoch-wise loss/accuracy).
+        Training uses early stopping (patience three epochs, best weights
+        restored) and ``ReduceLROnPlateau`` with factor ``0.5`` and patience
+        two epochs (minimum learning rate ``1e‑6``).
         """
 
         X_vec = self._vectorise(X, fit=True)
-        y_arr = np.asarray(list(y), dtype="float32")
+        y_arr = np.asarray(list(y), dtype="int64")
 
         self.model = self._build_model(X_vec.shape[1])
+
+        callbacks = [
+            tf.keras.callbacks.EarlyStopping(
+                monitor="val_loss",
+                patience=3,
+                restore_best_weights=True,
+            ),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss",
+                factor=0.5,
+                patience=2,
+                min_lr=1e-6,
+            ),
+        ]
+
         history = self.model.fit(
             X_vec,
             y_arr,
             epochs=self.epochs,
             batch_size=64,
+            validation_split=0.2,
             verbose=0,
+            callbacks=callbacks,
         )
+
         self._save()
         return history.history
 
     # ---------------------------------------------------------------- inference
     def predict_proba(self, X: Iterable[str]) -> np.ndarray:
-        """Return probabilities for class 0/1 as a NumPy array.
+        """Return softmax probabilities for each class.
 
-        Args:
-            X: Iterable of raw text samples.
-
-        Returns:
-            Array of shape ``(n_samples, 2)`` representing P(class=0), P(class=1).
+        Returns an array of shape ``(n_samples, 2)`` with
+        ``[P(credible), P(misinformation)]``.
         """
+
         if self.model is None:
-            self._load_if_available()
+            self._load()
         assert self.model is not None
 
         X_vec = self._vectorise(X, fit=False)
-        p1 = self.model.predict(X_vec, verbose=0).reshape(-1)
-        p1 = np.clip(p1, 1e-7, 1 - 1e-7)
-        p0 = 1.0 - p1
-        return np.stack([p0, p1], axis=1).astype("float32")
+        probs = self.model.predict(X_vec, verbose=0)
+        return np.asarray(probs, dtype="float32")
 
-    # ---------------------------------------------------------------- persistence
-    @property
-    def model_dir(self) -> Path:
-        """Directory for the Keras model."""
-
-        return self.models_dir / "tfidf_keras_model"
-
-    @property
-    def vectorizer_path(self) -> Path:
-        """Path for the saved TF-IDF vectorisers."""
-
-        return self.models_dir / "tfidf_vectorizer.pkl"
-
+    # --------------------------------------------------------------- persistence
     def _save(self) -> None:
-        """Persist vectorisers and Keras model to disk."""
+        """Persist the Keras model and TF‑IDF vectorisers to disk."""
 
         self.model_dir.mkdir(parents=True, exist_ok=True)
         assert self.model is not None
@@ -193,8 +268,8 @@ class TfidfDNNClassifier:
             self.vectorizer_path,
         )
 
-    def _load_if_available(self) -> None:
-        """Load vectorisers and model from disk if present."""
+    def _load(self) -> None:
+        """Load the Keras model and TF‑IDF vectorisers from disk if present."""
 
         if self.vectorizer_path.exists():
             data = joblib.load(self.vectorizer_path)
@@ -202,4 +277,3 @@ class TfidfDNNClassifier:
             self.char_vectorizer = data["char"]
         if self.model_dir.exists() and tf is not None:
             self.model = tf.keras.models.load_model(self.model_dir)
-

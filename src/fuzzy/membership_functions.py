@@ -1,4 +1,3 @@
-# src/fuzzy/membership_functions.py
 """Fuzzy membership function definitions for misinformation scoring.
 
 This module belongs to the *fuzzy* component of the pipeline. It defines
@@ -24,6 +23,7 @@ from __future__ import annotations
 
 from typing import Dict
 
+import src.utils.skfuzzy_compat  # noqa: F401
 import numpy as np
 import skfuzzy as fuzz
 from skfuzzy import control as ctrl
@@ -37,7 +37,8 @@ def _make_antecedent(name: str, universe: np.ndarray) -> ctrl.Antecedent:
         universe: Numpy array representing the universe of discourse.
 
     Returns:
-        skfuzzy.control.Antecedent instance with `low`, `medium`, `high` terms.
+        skfuzzy.control.Antecedent: Antecedent with ``low``, ``medium`` and
+        ``high`` membership functions defined on ``universe``.
     """
     ant = ctrl.Antecedent(universe, name)
     ant["low"] = fuzz.trimf(universe, [0.0, 0.0, 0.45])
@@ -47,38 +48,22 @@ def _make_antecedent(name: str, universe: np.ndarray) -> ctrl.Antecedent:
 
 
 def _make_consequent(name: str, universe: np.ndarray) -> ctrl.Consequent:
-    """Create the consequent misinfo_score with trapezoidal membership.
+    """Create the consequent ``misinfo_score`` with trapezoidal membership."""
 
-    Args:
-        name: Name of the consequent variable (usually 'misinfo_score').
-        universe: Numpy array representing the universe of discourse.
-
-    Returns:
-        skfuzzy.control.Consequent with `credible`, `suspicious`,
-        `misinformation` terms.
-    """
-    cons = ctrl.Consequent(universe, name)
+    cons = ctrl.Consequent(universe, name, defuzzify_method="centroid")
     cons["credible"] = fuzz.trapmf(universe, [0.0, 0.0, 0.25, 0.40])
     cons["suspicious"] = fuzz.trapmf(universe, [0.30, 0.45, 0.55, 0.70])
     cons["misinformation"] = fuzz.trapmf(universe, [0.60, 0.75, 1.0, 1.0])
     return cons
 
 
-def build_membership_functions() -> Dict[str, ctrl.Term]:
+def build_membership_functions() -> Dict[str, ctrl.ControlVariable]:
     """Build all fuzzy membership functions and return them in a dict.
 
     Returns:
-        dict with keys:
-          - 'source_credibility'
-          - 'bert_confidence'
-          - 'tfidf_confidence'
-          - 'nb_confidence'
-          - 'model_agreement'
-          - 'feedback_score'
-          - 'misinfo_score' (consequent)
-
-        Each antecedent is a skfuzzy.control.Antecedent instance; the
-        consequent is a skfuzzy.control.Consequent instance.
+        dict: Mapping from variable name to its
+        :class:`skfuzzy.control.Antecedent` or
+        :class:`skfuzzy.control.Consequent` instance.
     """
     # Universe for all inputs: [0, 1] with step 0.01
     u = np.arange(0.0, 1.0 + 0.01, 0.01)

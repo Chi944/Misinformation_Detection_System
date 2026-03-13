@@ -1,295 +1,254 @@
-"""Backward propagation feedback loop orchestration.
-
-This module belongs to the *feedback* component of the pipeline. It coordinates
-detector predictions, fuzzy scoring, optional LLM judge calls, model updates,
-and Git automation in a multi-step cycle.
-"""
-
-from __future__ import annotations
-
-import json
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
-
+import logging
 import numpy as np
-
-from src.detector import MisinformationDetector
-from src.evaluation.llm_judge import LLMJudge
-from src.feedback.feedback_store import FeedbackStore
-from src.feedback.online_trainer import OnlineTrainer
-from src.utils.git_manager import GitManager
+from pathlib import Path
 from src.utils.logger import get_logger
-
-LOGGER = get_logger(__name__)
-
-
-@dataclass
-class CycleMetrics:
-    """Metrics captured for a single feedback cycle."""
-
-    ensemble_f1: float
-    bert_f1: float
-    tfidf_f1: float
-    nb_f1: float
-    cycle_num: int
 
 
 class BackpropFeedbackLoop:
-    """Feedback loop controller implementing the 9-step cycle.
+    """
+    Orchestrates the full backward propagation feedback cycle.
 
-    Component:
-        Feedback / Controller.
+    After each forward pass through all 3 models, error signals flow
+    back to incrementally update BERT, TF-IDF, and Naive Bayes weights,
+    adjust fuzzy thresholds, and recalibrate ensemble weights.
+
+    Full cycle (9 steps):
+        text_batch -> forward pass -> ground truth -> error signals
+        -> backward pass -> fuzzy update -> weight recalibration
+        -> persist -> trend check -> git commit
+
+    Part of the MisinformationDetector pipeline.
 
     Args:
-        detector: Master misinformation detector instance.
-        store: FeedbackStore for persisting samples.
-        trainer: OnlineTrainer used for incremental updates.
-        judge: LLMJudge instance.
-        git_manager: GitManager for committing results.
+        detector: MisinformationDetector master instance
+        config (dict): loaded config.yaml as dict
     """
 
-    def __init__(
-        self,
-        detector: MisinformationDetector,
-        store: FeedbackStore,
-        trainer: OnlineTrainer,
-        judge: Optional[LLMJudge] = None,
-        git_manager: Optional[GitManager] = None,
-    ) -> None:
+    def __init__(self, detector, config):
         self.detector = detector
-        self.store = store
-        self.trainer = trainer
-        self.judge = judge
-        self.git_manager = git_manager or GitManager()
+        self.config = config
+        # Lazy imports to keep module import fast.
+        from src.feedback.feedback_store import FeedbackStore
+        from src.feedback.online_trainer import OnlineTrainer
 
-        self.cycle_count: int = 0
-        self.metrics_history: List[CycleMetrics] = []
+        self.store = FeedbackStore()
+        self.online = OnlineTrainer(
+            bert_model=detector.bert_model,
+            bert_tokenizer=detector.bert_tokenizer,
+            tfidf_model=detector.tfidf_model,
+            tfidf_vectorizer=detector.tfidf_vectorizer,
+            nb_model=detector.nb_model,
+            nb_vectorizer=detector.nb_vectorizer,
+            device=detector.device,
+        )
+        self.cycle_count = 0
+        self.metrics_history = []
+        self.logger = get_logger(__name__)
 
-    # ----------------------------------------------------------------- utilities
-    @staticmethod
-    def _f1_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-        from sklearn.metrics import f1_score
+        fb_cfg = config.get("feedback", {})
+        self.high_error_threshold = float(fb_cfg.get("high_error_threshold", 0.25))
+        self.min_f1 = float(fb_cfg.get("min_f1_threshold", 0.75))
+        self.fail_limit = int(fb_cfg.get("consecutive_fail_limit", 3))
 
-        if y_true.size == 0:
-            return 0.0
-        return float(f1_score(y_true, y_pred, zero_division=0))
-
-    # ------------------------------------------------------------------- run loop
-    async def run_cycle(
-        self,
-        texts: Sequence[str],
-        true_labels: Optional[Sequence[int]] = None,
-    ) -> Dict[str, Any]:
-        """Run a complete feedback cycle.
+    def run_cycle(self, text_batch: list, true_labels: list = None) -> dict:
+        """
+        Execute one complete forward + feedback backward cycle.
 
         Args:
-            texts: Input texts for this cycle.
-            true_labels: Optional ground-truth labels (0/1). If omitted, the
-                LLM judge is used to infer labels.
-
+            text_batch (list): list of text strings to process
+            true_labels (list, optional): int labels 0/1. If None, the
+                LLM judge determines ground truth automatically.
         Returns:
-            dict: Summary metrics for the cycle.
+            dict: per-model and ensemble metrics for this cycle
         """
+        self.logger.info("=== Feedback Cycle #%d START ===", self.cycle_count + 1)
+
+        # ── STEP 1: FORWARD PASS ────────────────────────────────────────
+        predictions = []
+        fuzzy_scores = []
+        for text in text_batch:
+            pred = self.detector.predict(text)
+            predictions.append(pred)
+            fb_score = self.store.get_feedback_score(text)
+            fscore = self.detector.fuzzy_engine.compute(
+                {
+                    "source_credibility": 0.5,
+                    "bert_confidence": pred["model_breakdown"]["bert"]["confidence"],
+                    "tfidf_confidence": pred["model_breakdown"]["tfidf"]["confidence"],
+                    "nb_confidence": pred["model_breakdown"]["naive_bayes"]["confidence"],
+                    "model_agreement": pred["model_agreement"],
+                    "feedback_score": fb_score,
+                }
+            )
+            fuzzy_scores.append(fscore)
+
+        # ── STEP 2: GROUND TRUTH ────────────────────────────────────────
+        judge_confidences = [1.0] * len(text_batch)
+        if true_labels is None:
+            try:
+                judgments = self.detector.llm_judge.evaluate_batch(
+                    list(zip(text_batch, predictions, fuzzy_scores))
+                )
+                true_labels = [
+                    1 if j.get("independent_verdict") == "misinformation" else 0 for j in judgments
+                ]
+                judge_confidences = [float(j.get("judge_confidence", 1.0)) for j in judgments]
+            except Exception as e:
+                self.logger.warning("LLM judge failed, defaulting labels to 0: %s", e)
+                true_labels = [0] * len(text_batch)
+
+        # ── STEP 3: COMPUTE ERROR SIGNALS ───────────────────────────────
+        errors = self._compute_errors(predictions, true_labels, judge_confidences)
+        high_error_idx = [
+            i for i, e in enumerate(errors) if e["total_error"] > self.high_error_threshold
+        ]
+        self.logger.info("High-error samples: %d/%d", len(high_error_idx), len(text_batch))
+
+        # ── STEP 4: BACKWARD PASS ───────────────────────────────────────
+        if high_error_idx:
+            err_batch = [(text_batch[i], true_labels[i]) for i in high_error_idx]
+            self.online.update_bert(err_batch)
+            self.online.update_tfidf(err_batch)
+            self.online.update_naive_bayes(err_batch)
+
+        # ── STEP 5: UPDATE FUZZY THRESHOLDS ─────────────────────────────
+        self._update_fuzzy_thresholds(errors, true_labels, fuzzy_scores)
+
+        # ── STEP 6: RECALIBRATE ENSEMBLE WEIGHTS ────────────────────────
+        cycle_metrics = self._compute_cycle_metrics(predictions, true_labels)
+        self.detector.ensemble.recalibrate_weights(cycle_metrics)
+
+        # ── STEP 7: PERSIST FEEDBACK ─────────────────────────────────────
+        for i, text in enumerate(text_batch):
+            self.store.save(text, predictions[i], true_labels[i], fuzzy_scores[i], errors[i])
+
+        # ── STEP 8: TREND CHECK ──────────────────────────────────────────
+        self.metrics_history.append(cycle_metrics)
+        self._check_improvement_trend()
+
+        # ── STEP 9: GIT COMMIT ───────────────────────────────────────────
+        try:
+            self.detector.git_manager.commit_cycle_results(self.cycle_count + 1, cycle_metrics)
+        except Exception as e:
+            self.logger.warning("Git commit failed (non-fatal): %s", e)
 
         self.cycle_count += 1
-        cycle_num = self.cycle_count
-        LOGGER.info("Starting feedback cycle %d with %d samples.", cycle_num, len(texts))
-
-        # STEP 1 — FORWARD PASS ------------------------------------------------
-        predictions: List[Dict[str, Any]] = []
-        for text in texts:
-            det_out = self.detector.predict(text)
-            ensemble = det_out["ensemble"]
-            fuzzy = det_out["fuzzy"]
-
-            fb_score = self.store.get_feedback_score(text)
-
-            predictions.append(
-                {
-                    "text": text,
-                    "detector": det_out,
-                    "ensemble_prob": float(ensemble["probability_misinformation"]),
-                    "ensemble_label": 1 if ensemble["label"] == "misinformation" else 0,
-                    "bert_conf": float(det_out["models"]["bert"][1]),
-                    "tfidf_conf": float(det_out["models"]["tfidf"][1]),
-                    "nb_conf": float(det_out["models"]["naive_bayes"][1]),
-                    "model_agreement": float(ensemble["agreement"]),
-                    "fuzzy_score": float(fuzzy["score"]),
-                    "feedback_score": float(fb_score),
-                }
-            )
-
-        # STEP 2 — GET GROUND TRUTH -------------------------------------------
-        if true_labels is not None:
-            labels = np.asarray(list(true_labels), dtype=int)
-            judge_conf = np.ones_like(labels, dtype="float32")
-        else:
-            if self.judge is None:
-                raise RuntimeError("LLMJudge is required when true_labels are not provided.")
-            dataset = [
-                {
-                    "text": p["text"],
-                    "predictions": p["detector"],
-                    "fuzzy_score": p["fuzzy_score"],
-                    "cycle_metrics": {"cycle_num": cycle_num},
-                }
-                for p in predictions
-            ]
-            judgments = await self.judge.evaluate_batch(dataset)
-            labels = np.asarray(
-                [1 if j["independent_verdict"] == "misinformation" else 0 for j in judgments],
-                dtype=int,
-            )
-            judge_conf = np.asarray(
-                [float(j.get("judge_confidence", 1.0)) for j in judgments], dtype="float32"
-            )
-
-        # STEP 3 — COMPUTE ERROR SIGNALS --------------------------------------
-        bert_errors = []
-        tfidf_errors = []
-        nb_errors = []
-        total_errors = []
-        high_error_flags = []
-        high_error_samples: List[Dict[str, Any]] = []
-
-        for i, p in enumerate(predictions):
-            true = float(labels[i])
-            jc = float(judge_conf[i])
-
-            bert_error = abs(p["bert_conf"] - true) * jc
-            tfidf_error = abs(p["tfidf_conf"] - true) * jc
-            nb_error = abs(p["nb_conf"] - true) * jc
-            total_error = 0.5 * bert_error + 0.3 * tfidf_error + 0.2 * nb_error
-
-            bert_errors.append(bert_error)
-            tfidf_errors.append(tfidf_error)
-            nb_errors.append(nb_error)
-            total_errors.append(total_error)
-
-            high = total_error > 0.25
-            high_error_flags.append(high)
-            if high:
-                high_error_samples.append(
-                    {
-                        "text": p["text"],
-                        "true_label": int(true),
-                        "inputs": p.get("bert_inputs"),  # optional, for future use
-                    }
-                )
-
-        bert_errors_arr = np.asarray(bert_errors, dtype="float32")
-        tfidf_errors_arr = np.asarray(tfidf_errors, dtype="float32")
-        nb_errors_arr = np.asarray(nb_errors, dtype="float32")
-        total_errors_arr = np.asarray(total_errors, dtype="float32")
-        high_error_flags_arr = np.asarray(high_error_flags, dtype=bool)
-
-        # STEP 4 — BACKWARD PASS (only on high_error samples) ------------------
-        self.trainer.update_bert(high_error_samples)
-        self.trainer.update_tfidf(high_error_samples)
-        self.trainer.update_naive_bayes(high_error_samples)
-
-        # STEP 5 — UPDATE FUZZY THRESHOLDS ------------------------------------
-        is_wrong = (labels != np.asarray([p["ensemble_label"] for p in predictions]))
-        fuzzy_scores = np.asarray([p["fuzzy_score"] for p in predictions], dtype="float32")
-        wrong_idx = np.where(is_wrong & (np.abs(fuzzy_scores - labels.astype("float32")) > 0.3))[0]
-        if wrong_idx.size > 0:
-            mean_error = float(np.mean(np.abs(fuzzy_scores[wrong_idx] - labels[wrong_idx])))
-            delta = 0.02 * np.sign(mean_error - 0.5)
-            engine = self.detector.fuzzy
-            new_thr = float(
-                np.clip(engine.threshold_suspicious + delta, 0.35, 0.60)
-            )
-            engine.threshold_suspicious = new_thr
-            LOGGER.info(
-                "Adjusted fuzzy suspicious threshold to %.3f based on mean_error=%.3f",
-                new_thr,
-                mean_error,
-            )
-
-        # STEP 6 — RECALIBRATE ENSEMBLE WEIGHTS -------------------------------
-        from sklearn.metrics import f1_score
-
-        y_true = labels
-        y_pred_ens = np.asarray([p["ensemble_label"] for p in predictions], dtype=int)
-        # For base models, use 0.5 threshold on confidences.
-        y_pred_bert = (np.asarray([p["bert_conf"] for p in predictions]) >= 0.5).astype(int)
-        y_pred_tfidf = (np.asarray([p["tfidf_conf"] for p in predictions]) >= 0.5).astype(int)
-        y_pred_nb = (np.asarray([p["nb_conf"] for p in predictions]) >= 0.5).astype(int)
-
-        bert_f1 = float(f1_score(y_true, y_pred_bert, zero_division=0))
-        tfidf_f1 = float(f1_score(y_true, y_pred_tfidf, zero_division=0))
-        nb_f1 = float(f1_score(y_true, y_pred_nb, zero_division=0))
-        ens_f1 = float(f1_score(y_true, y_pred_ens, zero_division=0))
-
-        batch_metrics = {
-            "bert": {"f1": bert_f1},
-            "tfidf": {"f1": tfidf_f1},
-            "naive_bayes": {"f1": nb_f1},
-            "ensemble": {"f1": ens_f1},
-        }
-        if hasattr(self.detector.ensemble, "recalibrate_weights"):
-            self.detector.ensemble.recalibrate_weights(batch_metrics)
-
-        # STEP 7 — PERSIST ALL FEEDBACK ---------------------------------------
-        for i, p in enumerate(predictions):
-            self.store.save(
-                text=p["text"],
-                prediction=int(p["ensemble_label"]),
-                true_label=int(labels[i]),
-                fuzzy_score=float(p["fuzzy_score"]),
-                error_dict={
-                    "bert_error": float(bert_errors_arr[i]),
-                    "tfidf_error": float(tfidf_errors_arr[i]),
-                    "nb_error": float(nb_errors_arr[i]),
-                    "total_error": float(total_errors_arr[i]),
-                },
-            )
-
-        # STEP 8 — IMPROVEMENT TREND CHECK ------------------------------------
-        metrics = CycleMetrics(
-            ensemble_f1=ens_f1,
-            bert_f1=bert_f1,
-            tfidf_f1=tfidf_f1,
-            nb_f1=nb_f1,
-            cycle_num=cycle_num,
+        ens_f1 = cycle_metrics.get("ensemble", {}).get("f1", 0.0)
+        self.logger.info(
+            "=== Feedback Cycle #%d COMPLETE - Ensemble F1: %.4f ===", self.cycle_count, ens_f1
         )
-        self.metrics_history.append(metrics)
+        return cycle_metrics
 
-        if len(self.metrics_history) >= 3:
-            last_three = self.metrics_history[-3:]
-            if all(m.ensemble_f1 < 0.75 for m in last_three):
-                LOGGER.critical(
-                    "Ensemble F1 below 0.75 for last 3 cycles. Marking retrain required."
-                )
-                flag_path = Path("RETRAIN_REQUIRED.flag")
-                payload = {
-                    "cycle": cycle_num,
-                    "recent_ensemble_f1": [m.ensemble_f1 for m in last_three],
-                }
-                flag_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    def _compute_errors(self, predictions, true_labels, judge_confidences) -> list:
+        """
+        Compute per-sample error signals for all 3 models.
 
-        # STEP 9 — GIT COMMIT --------------------------------------------------
-        if self.git_manager is not None:
-            self.git_manager.commit_cycle_results(
-                cycle_num,
+        Args:
+            predictions (list): list of predict() result dicts
+            true_labels (list): list of int ground truth labels
+            judge_confidences (list): per-sample LLM judge confidence
+        Returns:
+            list of dicts: bert_error, tfidf_error, nb_error,
+                           total_error, is_wrong per sample
+        """
+        errors = []
+        for pred, label, conf in zip(predictions, true_labels, judge_confidences):
+            label = float(label)
+            b = abs(pred["model_breakdown"]["bert"]["confidence"] - label) * conf
+            t = abs(pred["model_breakdown"]["tfidf"]["confidence"] - label) * conf
+            n = abs(pred["model_breakdown"]["naive_bayes"]["confidence"] - label) * conf
+            total = b * 0.5 + t * 0.3 + n * 0.2
+            pred_lbl = 1 if pred["crisp_label"] == "misinformation" else 0
+            errors.append(
                 {
-                    "ensemble_f1": ens_f1,
-                    "bert_f1": bert_f1,
-                    "tfidf_f1": tfidf_f1,
-                    "nb_f1": nb_f1,
-                },
+                    "bert_error": b,
+                    "tfidf_error": t,
+                    "nb_error": n,
+                    "total_error": total,
+                    "is_wrong": pred_lbl != int(label),
+                }
             )
+        return errors
 
-        summary = {
-            "cycle_num": cycle_num,
-            "ensemble_f1": ens_f1,
-            "bert_f1": bert_f1,
-            "tfidf_f1": tfidf_f1,
-            "nb_f1": nb_f1,
-            "num_samples": len(texts),
-            "num_high_error": int(high_error_flags_arr.sum()),
+    def _update_fuzzy_thresholds(self, errors, true_labels, fuzzy_scores):
+        """
+        Gradient-free hill climbing update of fuzzy threshold_suspicious.
+
+        When the fuzzy engine is confidently wrong, nudge the suspicious
+        threshold by +/- 0.02 toward reducing that error.
+
+        Args:
+            errors (list): error dicts from _compute_errors
+            true_labels (list): int ground truth labels
+            fuzzy_scores (list): float fuzzy scores for each sample
+        """
+        wrong_fuzzy = [
+            fuzzy_scores[i]
+            for i in range(len(errors))
+            if errors[i]["is_wrong"] and abs(fuzzy_scores[i] - true_labels[i]) > 0.3
+        ]
+        if not wrong_fuzzy:
+            return
+        mean_err = float(np.mean(wrong_fuzzy))
+        delta = 0.02 * np.sign(mean_err - 0.5)
+        old_thr = self.detector.fuzzy_engine.threshold_suspicious
+        new_thr = float(np.clip(old_thr + delta, 0.35, 0.60))
+        self.detector.fuzzy_engine.threshold_suspicious = new_thr
+        self.logger.info(
+            "Fuzzy threshold_suspicious: %.3f -> %.3f (delta=%+.3f)", old_thr, new_thr, delta
+        )
+
+    def _compute_cycle_metrics(self, predictions, true_labels) -> dict:
+        """
+        Compute per-model and ensemble F1 + accuracy for this batch.
+
+        Args:
+            predictions (list): list of predict() result dicts
+            true_labels (list): int ground truth labels
+        Returns:
+            dict: per-model metrics plus ensemble and current weights
+        """
+        from sklearn.metrics import accuracy_score, f1_score
+
+        y_true = [int(l) for l in true_labels]
+        metrics = {}
+        for name in ["bert", "tfidf", "naive_bayes"]:
+            y_pred = [p["model_breakdown"][name]["label"] for p in predictions]
+            metrics[name] = {
+                "f1": float(f1_score(y_true, y_pred, zero_division=0)),
+                "accuracy": float(accuracy_score(y_true, y_pred)),
+            }
+        ens_pred = [1 if p["crisp_label"] == "misinformation" else 0 for p in predictions]
+        metrics["ensemble"] = {
+            "f1": float(f1_score(y_true, ens_pred, zero_division=0)),
+            "accuracy": float(accuracy_score(y_true, ens_pred)),
         }
-        LOGGER.info("Completed feedback cycle %d: %s", cycle_num, summary)
-        return summary
+        metrics["weights"] = dict(self.detector.ensemble.weights)
+        return metrics
 
+    def _check_improvement_trend(self):
+        """
+        Alert and write flag file if F1 has been below threshold for
+        consecutive_fail_limit cycles in a row.
+
+        Writes RETRAIN_REQUIRED.flag to project root when triggered.
+        """
+        if len(self.metrics_history) < self.fail_limit:
+            return
+        recent_f1 = [
+            m.get("ensemble", {}).get("f1", 1.0) for m in self.metrics_history[-self.fail_limit :]
+        ]
+        if not all(f < self.min_f1 for f in recent_f1):
+            return
+        self.logger.critical(
+            "ACCURACY ALERT: Ensemble F1 below %.2f for %d consecutive " "cycles. Recent F1s: %s",
+            self.min_f1,
+            self.fail_limit,
+            [("%.4f" % f) for f in recent_f1],
+        )
+        flag = Path("RETRAIN_REQUIRED.flag")
+        flag.write_text(
+            "Full retrain required at cycle %d\n"
+            "Recent F1 scores: %s\n" % (self.cycle_count, [("%.4f" % f) for f in recent_f1])
+        )
+        self.logger.critical("Wrote %s", flag)

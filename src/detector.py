@@ -1,213 +1,270 @@
-"""Master misinformation detector interface.
-
-This class wires together the three base models, the ensemble, fuzzy engine,
-feedback components, and evaluation pipeline to provide a unified API.
-"""
-
-from __future__ import annotations
-
 import os
-from pathlib import Path
-from typing import Any, Dict, Sequence
-
-import numpy as np
 import yaml
-
-from src.evaluation.llm_judge import LLMJudge
-from src.evaluation.pipeline import EvaluationPipeline
-from src.feedback.backprop_loop import BackpropFeedbackLoop
-from src.feedback.feedback_store import FeedbackStore
-from src.feedback.online_trainer import OnlineTrainer
-from src.fuzzy.fuzzy_engine import FuzzyMisinformationEngine
-from src.models.bert_classifier import BERTMisinformationClassifier
-from src.models.ensemble_detector import EnsembleDetector, EnsembleWeights
-from src.models.naive_bayes_model import TFNaiveBayesWrapper
-from src.models.tfidf_model import TfidfDNNClassifier
-from src.training.dataset import MisinformationDataset
-from src.utils.git_manager import GitManager
 from src.utils.logger import get_logger
-
-LOGGER = get_logger(__name__)
 
 
 class MisinformationDetector:
-    """High-level detector orchestrating all core components.
-
-    Component:
-        Detector / Master.
+    """
+    Master class for the full misinformation detection pipeline.
+    Coordinates all 3 models, ensemble, fuzzy engine, feedback loop,
+    LLM judge, and evaluation pipeline.
 
     Args:
-        config: Path to ``config.yaml``.
-        fast_mode: If True, use lighter settings for CI/smoke tests.
+        config (str or dict): path to config.yaml or pre-loaded dict
+        fast_mode (bool): skip heavy model downloads for CI/smoke tests
     """
 
-    def __init__(self, config: str = "config.yaml", fast_mode: bool = False) -> None:
-        self.config_path = Path(config)
+    def __init__(self, config="config.yaml", fast_mode=False):
+        os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+        self.logger = get_logger(__name__)
         self.fast_mode = fast_mode
 
-        with self.config_path.open("r", encoding="utf-8") as f:
-            self.cfg = yaml.safe_load(f)
+        if isinstance(config, dict):
+            self.config = config
+        else:
+            with open(config, "r") as f:
+                self.config = yaml.safe_load(f)
 
-        # Suppress TF logs
-        os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+        self.device = self._setup_device()
+        self.bert_model = None
+        self.bert_tokenizer = None
+        self.tfidf_model = None
+        self.tfidf_vectorizer = None
+        self.nb_model = None
+        self.nb_vectorizer = None
+        self.ensemble = None
+        self.fuzzy_engine = None
+        self.feedback_loop = None
+        self.llm_judge = None
+        self.eval_pipeline = None
+        self.git_manager = None
 
-        model_cfg = self.cfg.get("models", {})
+        self._init_fuzzy()
 
-        # Base models -----------------------------------------------------------
-        nb_cfg = model_cfg.get("naive_bayes", {})
-        tfidf_cfg = model_cfg.get("tfidf", {})
-        bert_cfg = model_cfg.get("bert", {})
+        if self.fast_mode:
+            self.logger.info("fast_mode=True: skipping model/LLM/eval init")
+        else:
+            self._init_models()
+            self._init_ensemble()
+            self._init_llm_judge()
+            self._init_feedback_loop()
+            self._init_evaluation()
+            self._init_git_manager()
 
-        self.nb = TFNaiveBayesWrapper(config=nb_cfg, models_dir="models")
-        self.tfidf = TfidfDNNClassifier(config=tfidf_cfg, models_dir="models")
+        self.logger.info(
+            "MisinformationDetector ready (fast_mode=%s device=%s)", fast_mode, self.device
+        )
 
-        self.bert = None
-        if not self.fast_mode:
-            self.bert = BERTMisinformationClassifier(
-                checkpoint=bert_cfg.get("checkpoint", "bert-base-uncased"),
-                dropout=bert_cfg.get("dropout", 0.3),
+    def _setup_device(self):
+        """Auto-detect GPU for PyTorch and TensorFlow."""
+        if self.fast_mode:
+            self.logger.info("fast_mode=True: skipping GPU detection")
+            return "cpu"
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                self.logger.info("PyTorch CUDA available")
+                return "cuda"
+        except ImportError:
+            pass
+        try:
+            import tensorflow as tf
+
+            gpus = tf.config.list_physical_devices("GPU")
+            if gpus:
+                self.logger.info("TensorFlow GPU: %s", gpus)
+        except ImportError:
+            pass
+        self.logger.info("Using CPU")
+        return "cpu"
+
+    def _init_models(self):
+        """Initialise all 3 individual models with lazy imports."""
+        cfg = self.config.get("models", {})
+
+        if self.fast_mode:
+            self.logger.info("fast_mode=True: skipping BERT init")
+        else:
+            try:
+                from src.models.bert_classifier import BERTMisinformationClassifier
+                from transformers import BertTokenizer
+
+                self.bert_model = BERTMisinformationClassifier(
+                    dropout=cfg.get("bert", {}).get("dropout", 0.3)
+                )
+                self.bert_model.to(self.device)
+                self.bert_model.eval()
+                self.bert_tokenizer = BertTokenizer.from_pretrained(
+                    cfg.get("bert", {}).get("checkpoint", "bert-base-uncased")
+                )
+                self.logger.info("BERT initialised")
+            except Exception as e:
+                self.logger.warning("BERT init failed: %s", e)
+
+        try:
+            from src.models.tfidf_model import TFIDFModel
+
+            self.tfidf_model = TFIDFModel(self.config)
+            self.tfidf_vectorizer = getattr(self.tfidf_model, "word_vectorizer", None)
+            self.logger.info("TF-IDF initialised")
+        except Exception as e:
+            self.logger.warning("TF-IDF init failed: %s", e)
+
+        try:
+            from src.models.naive_bayes_model import TFNaiveBayesWrapper
+
+            self.nb_model = TFNaiveBayesWrapper()
+            self.nb_vectorizer = getattr(self.nb_model, "vectorizer", None)
+            self.logger.info("Naive Bayes initialised")
+        except Exception as e:
+            self.logger.warning("NB init failed: %s", e)
+
+    def _init_ensemble(self):
+        """Initialise ensemble with all 3 models."""
+        try:
+            from src.models.ensemble_detector import EnsembleDetector
+
+            self.ensemble = EnsembleDetector(
+                self.config,
+                bert_model=self.bert_model,
+                bert_tokenizer=self.bert_tokenizer,
+                tfidf_model=self.tfidf_model,
+                nb_model=self.nb_model,
+                nb_vectorizer=self.nb_vectorizer,
+                device=self.device,
             )
+            self.logger.info("Ensemble initialised")
+        except Exception as e:
+            self.logger.warning("Ensemble init failed: %s", e)
 
-        weights = EnsembleWeights(
-            bert=float(bert_cfg.get("weight", 0.5)),
-            tfidf=float(tfidf_cfg.get("weight", 0.3)),
-            naive_bayes=float(nb_cfg.get("weight", 0.2)),
-        )
-        self.ensemble = EnsembleDetector(
-            bert_model=self.bert if self.bert is not None else BERTMisinformationClassifier(),  # type: ignore[arg-type]
-            tfidf_model=self.tfidf,
-            nb_model=self.nb,
-            weights=weights,
-        )
+    def _init_fuzzy(self):
+        """Initialise fuzzy inference engine."""
+        try:
+            from src.fuzzy.fuzzy_engine import FuzzyMisinformationEngine
 
-        # Fuzzy engine ---------------------------------------------------------
-        self.fuzzy = FuzzyMisinformationEngine()
-        fuzzy_cfg = self.cfg.get("fuzzy", {})
-        self.fuzzy.threshold_suspicious = float(
-            fuzzy_cfg.get("threshold_suspicious", self.fuzzy.threshold_suspicious)
-        )
-        self.fuzzy.threshold_misinformation = float(
-            fuzzy_cfg.get("threshold_misinformation", self.fuzzy.threshold_misinformation)
-        )
+            self.fuzzy_engine = FuzzyMisinformationEngine()
+            self.logger.info("Fuzzy engine initialised")
+        except Exception as e:
+            self.logger.warning("Fuzzy init failed: %s", e)
 
-        # Feedback components --------------------------------------------------
-        self.feedback_store = FeedbackStore(path="feedback.db")
-        self.online_trainer = OnlineTrainer(
-            bert_model=self.bert,
-            tfidf_model=self.tfidf,
-            nb_model=self.nb,
-        )
-        self.git_manager = GitManager()
+    def _init_llm_judge(self):
+        """Initialise local Ollama LLM judge."""
+        try:
+            from src.evaluation.llm_judge import LLMJudge
 
-        # LLM judge and evaluation pipeline -----------------------------------
-        llm_cfg = self.cfg.get("llm_judge", {})
-        self.llm_judge = LLMJudge(
-            host=llm_cfg.get("host", "http://localhost:11434"),
-            model=llm_cfg.get("model", "llama3"),
-            max_retries=int(llm_cfg.get("max_retries", 3)),
-            backoff_base=float(llm_cfg.get("backoff_base", 2)),
-        )
-        self.eval_pipeline = EvaluationPipeline(
-            detector=self,
-            judge=self.llm_judge,
-            output_dir=self.cfg.get("evaluation", {}).get("output_dir", "reports"),
-        )
+            judge_cfg = self.config.get("llm_judge", {})
+            self.llm_judge = LLMJudge(
+                model=judge_cfg.get("model", "llama3"),
+                host=judge_cfg.get("host", "http://localhost:11434"),
+            )
+            self.logger.info("LLM Judge initialised")
+        except Exception as e:
+            self.logger.warning("LLM Judge init failed (Ollama may not be running): %s", e)
 
-        self.feedback_loop = BackpropFeedbackLoop(
-            detector=self,
-            store=self.feedback_store,
-            trainer=self.online_trainer,
-            judge=self.llm_judge,
-            git_manager=self.git_manager,
-        )
+    def _init_feedback_loop(self):
+        """Initialise backward propagation feedback loop."""
+        try:
+            from src.feedback.backprop_loop import BackpropFeedbackLoop
 
-    # ----------------------------------------------------------------- predict
-    def predict(self, text: str) -> Dict[str, Any]:
-        """Run a prediction on a single text.
+            self.feedback_loop = BackpropFeedbackLoop(self, self.config)
+            self.logger.info("Feedback loop initialised")
+        except Exception as e:
+            self.logger.warning("Feedback loop init failed: %s", e)
 
-        Returns:
-            Dict with crisp label, ensemble probability, fuzzy score, per-model
-            breakdown, ensemble weights, and model agreement.
+    def _init_evaluation(self):
+        """Initialise evaluation pipeline."""
+        try:
+            from src.evaluation.pipeline import EvaluationPipeline
+
+            self.eval_pipeline = EvaluationPipeline(self, self.config)
+            self.logger.info("Evaluation pipeline initialised")
+        except Exception as e:
+            self.logger.warning("Eval pipeline init failed: %s", e)
+
+    def _init_git_manager(self):
+        """Initialise git automation manager."""
+        try:
+            from src.utils.git_manager import GitManager
+
+            self.git_manager = GitManager()
+            self.logger.info("Git manager initialised")
+        except Exception as e:
+            self.logger.warning("Git manager init failed: %s", e)
+
+    def predict(self, text):
         """
-
-        ens = self.ensemble.predict(text)
-
-        bert_conf = float(ens["bert_proba"][1])
-        tfidf_conf = float(ens["tfidf_proba"][1])
-        nb_conf = float(ens["naive_bayes_proba"][1])
-
-        fuzzy_inputs = {
-            "source_credibility": 0.5,
-            "bert_confidence": bert_conf,
-            "tfidf_confidence": tfidf_conf,
-            "nb_confidence": nb_conf,
-            "model_agreement": float(ens["agreement"]),
-            "feedback_score": 0.5,
-        }
-        misinfo_score = self.fuzzy.compute(fuzzy_inputs)
-
-        weights = {
-            "bert": float(self.ensemble.weights.bert),
-            "tfidf": float(self.ensemble.weights.tfidf),
-            "naive_bayes": float(self.ensemble.weights.naive_bayes),
-        }
-
-        model_breakdown = {
-            "bert": {"label": int(bert_conf >= 0.5), "confidence": bert_conf},
-            "tfidf": {"label": int(tfidf_conf >= 0.5), "confidence": tfidf_conf},
-            "naive_bayes": {"label": int(nb_conf >= 0.5), "confidence": nb_conf},
-        }
-
-        return {
-            "crisp_label": ens["crisp_label"],
-            "ensemble_probability": float(ens["ensemble_probability"]),
-            "fuzzy_score": float(misinfo_score),
-            "model_breakdown": model_breakdown,
-            "ensemble_weights": weights,
-            "model_agreement": float(ens["agreement"]),
-            # Backwards-compatible fields used elsewhere:
-            "models": {
-                "bert": ens["bert_proba"],
-                "tfidf": ens["tfidf_proba"],
-                "naive_bayes": ens["naive_bayes_proba"],
-            },
-            "ensemble": {
-                "probability_misinformation": ens["ensemble_probability"],
-                "label": ens["crisp_label"],
-                "agreement": ens["agreement"],
-            },
-            "fuzzy": {
-                "score": misinfo_score,
-                "inputs": fuzzy_inputs,
-            },
-        }
-
-    # ---------------------------------------------------------------- evaluate
-    def evaluate(
-        self,
-        texts: Sequence[str],
-        labels: Sequence[int],
-        use_llm_judge: bool = True,
-    ) -> Dict[str, Any]:
-        """Run the full evaluation pipeline.
+        Run full prediction on one text sample.
 
         Args:
-            texts: Input texts.
-            labels: Ground-truth labels.
-            use_llm_judge: Whether to include the LLM judge.
-
+            text (str): input text to classify
         Returns:
-            Evaluation report dictionary.
+            dict: crisp_label, ensemble_probability, fuzzy_score,
+                  model_breakdown, ensemble_weights, model_agreement
         """
+        if self.ensemble is None:
+            return self._fallback_predict(text)
 
-        return self.eval_pipeline.evaluate(texts, labels, use_llm_judge=use_llm_judge)
+        result = self.ensemble.predict(text)
 
-    def evaluate_quick(
-        self,
-        texts: Sequence[str],
-        labels: Sequence[int],
-    ) -> Dict[str, Any]:
-        """Fast evaluation without the LLM judge (for CI/smoke tests)."""
+        if self.fuzzy_engine is not None:
+            result["fuzzy_score"] = self.fuzzy_engine.compute(
+                {
+                    "source_credibility": 0.5,
+                    "bert_confidence": result["model_breakdown"]["bert"]["confidence"],
+                    "tfidf_confidence": result["model_breakdown"]["tfidf"]["confidence"],
+                    "nb_confidence": result["model_breakdown"]["naive_bayes"]["confidence"],
+                    "model_agreement": result["model_agreement"],
+                    "feedback_score": 0.5,
+                }
+            )
+        else:
+            result["fuzzy_score"] = 0.5
 
-        return self.eval_pipeline.evaluate(texts, labels, use_llm_judge=False)
+        return result
 
+    def _fallback_predict(self, text):
+        """Return neutral prediction when ensemble is not loaded."""
+        self.logger.warning("Ensemble not loaded - returning neutral")
+        return {
+            "crisp_label": "credible",
+            "ensemble_probability": 0.5,
+            "fuzzy_score": 0.5,
+            "model_breakdown": {
+                "bert": {"label": 0, "confidence": 0.5},
+                "tfidf": {"label": 0, "confidence": 0.5},
+                "naive_bayes": {"label": 0, "confidence": 0.5},
+            },
+            "ensemble_weights": {"bert": 0.5, "tfidf": 0.3, "naive_bayes": 0.2},
+            "model_agreement": 1.0,
+        }
+
+    def evaluate(self, dataset, use_llm_judge=True):
+        """
+        Run full evaluation pipeline.
+
+        Args:
+            dataset: dataset or list of (text, label) tuples
+            use_llm_judge (bool): whether to call LLM judge
+        Returns:
+            dict: evaluation report
+        """
+        if self.eval_pipeline is None:
+            self.logger.warning("Eval pipeline not initialised")
+            return {}
+        return self.eval_pipeline.evaluate(dataset, use_llm_judge)
+
+    def evaluate_quick(self, texts, labels):
+        """
+        Fast evaluation without LLM judge. Used by CI and smoke tests.
+
+        Args:
+            texts (list): text samples
+            labels (list): ground truth labels
+        Returns:
+            dict: evaluation report without LLM judge
+        """
+        dataset = list(zip(texts, labels))
+        if self.eval_pipeline is not None:
+            return self.eval_pipeline.evaluate(dataset, use_llm_judge=False)
+        return {"ensemble": {"accuracy": 0.0, "f1": 0.0}}

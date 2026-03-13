@@ -29,12 +29,13 @@ def load_models():
     """Load the single TF-IDF + Logistic Regression model for inference."""
     global _models
     _models = {}
-    tfidf_path = MODELS_DIR / 'tfidf_logistic.pkl'
+    tfidf_path = MODELS_DIR / "tfidf_logistic.pkl"
     if tfidf_path.exists():
         from src.traditional_ml import TfidfLogisticClassifier
+
         model = TfidfLogisticClassifier()
         model.load(tfidf_path)
-        _models['tfidf_logistic'] = model
+        _models["tfidf_logistic"] = model
         print("Loaded TF-IDF + Logistic Regression model")
     else:
         print("Warning: No model found. Train with: python main.py --train")
@@ -43,12 +44,14 @@ def load_models():
 
 class InferenceEngine:
     """Inference engine using the single TF-IDF + Logistic Regression model."""
-    
+
     def __init__(self, models: Dict[str, Any] = None):
         self.models = models or _models
-        self.default_model = 'tfidf_logistic'
+        self.default_model = "tfidf_logistic"
 
-    def predict(self, text: str, include_explanation: bool = False, url: Optional[str] = None) -> Dict[str, Any]:
+    def predict(
+        self, text: str, include_explanation: bool = False, url: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Make a prediction on input text using the single TF-IDF + LR model."""
         if not self.models:
             raise ValueError("No model loaded. Train with: python main.py --train")
@@ -57,43 +60,39 @@ class InferenceEngine:
         start_time = time.time()
         proba = model.predict_proba(pd.Series([text]))[0]
         pred = proba.argmax()
-        
+
         latency_ms = (time.time() - start_time) * 1000
-        
+
         result = {
-            'text': text[:500] + '...' if len(text) > 500 else text,
-            'prediction': LABEL_NAMES[pred],
-            'label': int(pred),
-            'confidence': float(proba[pred]),
-            'probabilities': {
-                LABEL_NAMES[i]: float(p) for i, p in enumerate(proba)
-            },
-            'model': self.default_model,
-            'latency_ms': round(latency_ms, 2),
-            'within_latency_constraint': latency_ms <= MAX_INFERENCE_LATENCY_MS
+            "text": text[:500] + "..." if len(text) > 500 else text,
+            "prediction": LABEL_NAMES[pred],
+            "label": int(pred),
+            "confidence": float(proba[pred]),
+            "probabilities": {LABEL_NAMES[i]: float(p) for i, p in enumerate(proba)},
+            "model": self.default_model,
+            "latency_ms": round(latency_ms, 2),
+            "within_latency_constraint": latency_ms <= MAX_INFERENCE_LATENCY_MS,
         }
-        
+
         # Add explanation if requested (needed for flagged terms in credibility audit)
         explanation_features = None
         if include_explanation:
             from src.explainability import ModelExplainer
+
             explainer = ModelExplainer()
             explanation = explainer.explain_with_lime(
-                text,
-                lambda x: model.predict_proba(pd.Series(x)),
-                num_features=15,
-                num_samples=200
+                text, lambda x: model.predict_proba(pd.Series(x)), num_features=15, num_samples=200
             )
-            result['explanation'] = {
-                'top_features': explanation['feature_weights']
-            }
-            explanation_features = explanation['feature_weights']
+            result["explanation"] = {"top_features": explanation["feature_weights"]}
+            explanation_features = explanation["feature_weights"]
 
         # Credibility audit: Sensationalism, Political Bias, Source Credibility,
         # Factuality Index, Flagged Terms
         misinfo_prob = float(proba[1]) if len(proba) > 1 else 0.0
-        result['credibility_audit'] = self._run_credibility_audit(
-            text, url=url, misinformation_prob=misinfo_prob,
+        result["credibility_audit"] = self._run_credibility_audit(
+            text,
+            url=url,
+            misinformation_prob=misinfo_prob,
             explanation_features=explanation_features,
             predicted_label=int(pred),
         )
@@ -110,6 +109,7 @@ class InferenceEngine:
     ) -> Dict[str, Any]:
         """Run credibility audit using src.credibility_audit."""
         from src.credibility_audit import run_credibility_audit
+
         return run_credibility_audit(
             text=text,
             url=url,
@@ -117,17 +117,14 @@ class InferenceEngine:
             explanation_features=explanation_features,
             predicted_label=predicted_label,
         )
-    
+
     def predict_batch(self, texts: list) -> list:
         """Make predictions on multiple texts using the single model."""
         return [self.predict(text) for text in texts]
 
     def get_model_info(self) -> Dict[str, Any]:
         """Get information about the loaded model."""
-        return {
-            'model': self.default_model,
-            'latency_constraint_ms': MAX_INFERENCE_LATENCY_MS
-        }
+        return {"model": self.default_model, "latency_constraint_ms": MAX_INFERENCE_LATENCY_MS}
 
 
 def _extract_text_from_html(html: str) -> str:
@@ -155,9 +152,7 @@ def _extract_text_from_html(html: str) -> str:
         if m_title:
             title = unescape(m_title.group(1)).strip()
 
-    desc = _find_meta(
-        r'(name=["\']description["\']|property=["\']og:description["\'])'
-    )
+    desc = _find_meta(r'(name=["\']description["\']|property=["\']og:description["\'])')
 
     parts = [p for p in [title, desc] if p]
 
@@ -242,96 +237,94 @@ def _build_text_from_url(url: str, header: Optional[str] = None) -> str:
 
 # Flask API routes
 
-@app.route('/health', methods=['GET'])
+
+@app.route("/health", methods=["GET"])
 def health_check():
     """Health check endpoint."""
-    return jsonify({
-        'status': 'healthy',
-        'model_loaded': len(_models) > 0
-    })
+    return jsonify({"status": "healthy", "model_loaded": len(_models) > 0})
 
 
-@app.route('/models', methods=['GET'])
+@app.route("/models", methods=["GET"])
 def get_models():
     """Get information about the loaded model."""
     engine = InferenceEngine()
     return jsonify(engine.get_model_info())
 
 
-@app.route('/predict', methods=['POST'])
+@app.route("/predict", methods=["POST"])
 def predict():
     """
     Make a prediction on input text.
     Request body: text (optional), url (optional), header (optional), include_explanation (optional).
     """
     data = request.get_json() or {}
-    
-    text = data.get('text')
-    url = data.get('url')
-    header = data.get('header')
+
+    text = data.get("text")
+    url = data.get("url")
+    header = data.get("header")
 
     if not text and url:
         text = _build_text_from_url(str(url), header=str(header) if header else None)
 
     if not text or not str(text).strip():
-        return jsonify({'error': 'Provide either non-empty \"text\" or a valid \"url\".'}), 400
-    
+        return jsonify({"error": 'Provide either non-empty "text" or a valid "url".'}), 400
+
     text = str(text)
-    include_explanation = data.get('include_explanation', True)
+    include_explanation = data.get("include_explanation", True)
     try:
         engine = InferenceEngine()
         result = engine.predict(text, include_explanation=include_explanation, url=url or None)
         return jsonify(result)
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
-        return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
+        return jsonify({"error": f"Prediction failed: {str(e)}"}), 500
 
 
-@app.route('/predict/batch', methods=['POST'])
+@app.route("/predict/batch", methods=["POST"])
 def predict_batch():
     """Make predictions on multiple texts. Request body: texts (required)."""
     data = request.get_json()
-    
-    if not data or 'texts' not in data:
-        return jsonify({'error': 'Missing required field: texts'}), 400
-    
-    texts = data['texts']
+
+    if not data or "texts" not in data:
+        return jsonify({"error": "Missing required field: texts"}), 400
+
+    texts = data["texts"]
     if not isinstance(texts, list):
-        return jsonify({'error': 'texts must be a list'}), 400
+        return jsonify({"error": "texts must be a list"}), 400
     try:
         engine = InferenceEngine()
         results = engine.predict_batch(texts)
-        return jsonify({'predictions': results})
+        return jsonify({"predictions": results})
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
-        return jsonify({'error': f'Batch prediction failed: {str(e)}'}), 500
+        return jsonify({"error": f"Batch prediction failed: {str(e)}"}), 500
 
 
-@app.route('/explain', methods=['POST'])
+@app.route("/explain", methods=["POST"])
 def explain():
     """Get detailed explanation for a prediction. Request body: text (required)."""
     data = request.get_json()
-    
-    if not data or 'text' not in data:
-        return jsonify({'error': 'Missing required field: text'}), 400
-    
-    text = data['text']
+
+    if not data or "text" not in data:
+        return jsonify({"error": "Missing required field: text"}), 400
+
+    text = data["text"]
     try:
         engine = InferenceEngine()
         result = engine.predict(text, include_explanation=True)
         return jsonify(result)
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
-        return jsonify({'error': f'Explanation failed: {str(e)}'}), 500
+        return jsonify({"error": f"Explanation failed: {str(e)}"}), 500
 
 
-def run_api(host: str = '0.0.0.0', port: int = 5000, debug: bool = False):
+def run_api(host: str = "0.0.0.0", port: int = 5000, debug: bool = False):
     """
     Run the Flask API server.
-    
+
     Args:
         host: Host address
         port: Port number

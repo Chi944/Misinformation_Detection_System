@@ -32,6 +32,9 @@ def parse_args():
     parser.add_argument(
         "--skip-gates", action="store_true", help="Skip accuracy gate checks (for debugging only)"
     )
+    parser.add_argument(
+        "--skip-bert", action="store_true", help="Skip BERT training (faster on CPU)"
+    )
     return parser.parse_args()
 
 
@@ -71,6 +74,7 @@ def main():
         results = trainer.train_all(
             dataset,
             skip_gates=args.skip_gates,
+            skip_bert=args.skip_bert,
         )
         logger.info("Training complete. Results:")
         for model_name, metrics in results.items():

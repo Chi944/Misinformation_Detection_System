@@ -247,11 +247,14 @@ class TFIDFModel:
         ``[P(credible), P(misinformation)]``.
         """
 
+        X_list = [str(t) for t in X]
+        n = len(X_list)
         if self.model is None:
             self._load()
-        assert self.model is not None
+        if self.model is None:
+            return np.full((n, 2), 0.5, dtype="float32")
 
-        X_vec = self._vectorise(X, fit=False)
+        X_vec = self._vectorise(X_list, fit=False)
         probs = self.model.predict(X_vec, verbose=0)
         return np.asarray(probs, dtype="float32")
 

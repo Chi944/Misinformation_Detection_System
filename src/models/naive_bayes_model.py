@@ -150,7 +150,7 @@ class TFNaiveBayesWrapper(tf.Module):
         base_clf = self._base_clf.fit(X_vec, y_arr)
 
         # Calibrate probabilities using sigmoid (Platt scaling).
-        calib = CalibratedClassifierCV(base_estimator=base_clf, method="sigmoid", cv=3)
+        calib = CalibratedClassifierCV(estimator=base_clf, method="sigmoid", cv=3)
         calib.fit(X_vec, y_arr)
         self._calibrated_clf = calib
 
@@ -172,6 +172,10 @@ class TFNaiveBayesWrapper(tf.Module):
         X_vec = self.vectorizer.transform(list(texts))
         proba = self._calibrated_clf.predict_proba(X_vec)
         return np.asarray(proba, dtype="float32")
+
+    def predict_proba_np(self, texts: Iterable[str]) -> np.ndarray:
+        """Public API for ensemble: return class probabilities as NumPy array."""
+        return self._predict_proba_numpy(texts)
 
     @tf.function  # type: ignore[arg-type]
     def predict(self, texts: "tf.Tensor") -> "tf.Tensor":

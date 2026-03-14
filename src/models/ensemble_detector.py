@@ -45,15 +45,19 @@ class EnsembleDetector:
 
     def __init__(
         self,
-        bert_model: BERTMisinformationClassifier,
-        tfidf_model: TFIDFModel,
-        nb_model: TFNaiveBayesWrapper,
+        bert_model: Optional[BERTMisinformationClassifier] = None,
+        tfidf_model: Optional[TFIDFModel] = None,
+        nb_model: Optional[TFNaiveBayesWrapper] = None,
         weights: Optional[EnsembleWeights] = None,
+        bert_tokenizer=None,
+        device: Optional[str] = None,
     ) -> None:
         self.bert_model = bert_model
         self.tfidf_model = tfidf_model
         self.nb_model = nb_model
         self.weights = weights or EnsembleWeights()
+        self.bert_tokenizer = bert_tokenizer
+        self.device = device or "cpu"
 
     # ----------------------------------------------------------------- predict
     def predict(self, text: str) -> Dict[str, Any]:
@@ -74,27 +78,25 @@ class EnsembleDetector:
 
         texts = [text]
 
-        # BERT probabilities – for now we treat them as already available via
-        # a dummy batch dict composed elsewhere. For the ensemble we rely on
-        # the NB and TF-IDF models primarily; BERT integration is handled
-        # through the Trainer for validation-time evaluation.
-        # To keep this ensemble usable even when BERT is unavailable, we
-        # defensively set a neutral probability if needed.
         bert_p = np.array([[0.5, 0.5]], dtype="float32")
-
-        try:
-            # Lazily import torch to avoid hard dependency in environments
-            # where BERT is not used.
-            import torch  # type: ignore
-
-            if isinstance(self.bert_model, BERTMisinformationClassifier):
-                # Simple one-off tokenisation using the model's tokenizer is
-                # handled upstream; here we keep the interface minimal by
-                # expecting callers who care about BERT to provide probabilities
-                # directly. For now, we fall back to neutral predictions.
-                _ = torch  # placate linters
-        except Exception:  # pragma: no cover - environment dependent
-            pass
+        if self.bert_model is not None and self.bert_tokenizer is not None:
+            try:
+                import torch
+                enc = self.bert_tokenizer(
+                    text,
+                    padding=True,
+                    truncation=True,
+                    max_length=128,
+                    return_tensors="pt",
+                )
+                ids = enc["input_ids"].to(self.device)
+                mask = enc["attention_mask"].to(self.device)
+                with torch.no_grad():
+                    out = self.bert_model.model(input_ids=ids, attention_mask=mask).logits
+                    probs = torch.softmax(out, dim=-1).cpu().numpy()
+                bert_p = np.asarray(probs, dtype="float32")
+            except Exception:
+                pass
 
         if self.tfidf_model is not None:
             tfidf_p = self.tfidf_model.predict_proba(texts)

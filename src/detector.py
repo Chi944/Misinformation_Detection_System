@@ -89,18 +89,27 @@ class MisinformationDetector:
             self.logger.info("fast_mode=True: skipping BERT init")
         else:
             try:
+                import torch
                 from transformers import BertTokenizer
 
                 from src.models.bert_classifier import BERTMisinformationClassifier
 
+                bert_cfg = cfg.get("bert", {})
+                checkpoint = bert_cfg.get("checkpoint", "bert-base-uncased")
                 self.bert_model = BERTMisinformationClassifier(
-                    dropout=cfg.get("bert", {}).get("dropout", 0.3)
+                    checkpoint=checkpoint,
+                    dropout=bert_cfg.get("dropout", 0.3),
                 )
+                ckpt_path = os.path.join("models", "bert_classifier.pt")
+                if os.path.isfile(ckpt_path):
+                    self.bert_model.model.load_state_dict(
+                        torch.load(ckpt_path, map_location=self.device),
+                        strict=True,
+                    )
+                    self.logger.info("BERT loaded from %s", ckpt_path)
                 self.bert_model.to(self.device)
                 self.bert_model.eval()
-                self.bert_tokenizer = BertTokenizer.from_pretrained(
-                    cfg.get("bert", {}).get("checkpoint", "bert-base-uncased")
-                )
+                self.bert_tokenizer = BertTokenizer.from_pretrained(checkpoint)
                 self.logger.info("BERT initialised")
             except Exception as e:
                 self.logger.warning("BERT init failed: %s", e)
@@ -108,7 +117,15 @@ class MisinformationDetector:
         try:
             from src.models.tfidf_model import TFIDFModel
 
-            self.tfidf_model = TFIDFModel(self.config)
+            tf_cfg = cfg.get("tfidf", {})
+            self.tfidf_model = TFIDFModel(
+                models_dir="models",
+                max_features=tf_cfg.get("max_features", 100000),
+                ngram_range=tuple(tf_cfg.get("ngram_range", [1, 3])),
+                char_ngram_range=tuple(tf_cfg.get("char_ngram_range", [2, 4])),
+                learning_rate=tf_cfg.get("learning_rate", 1.0e-3),
+                epochs=tf_cfg.get("epochs", 20),
+            )
             self.tfidf_vectorizer = getattr(self.tfidf_model, "word_vectorizer", None)
             self.logger.info("TF-IDF initialised")
         except Exception as e:
@@ -129,12 +146,10 @@ class MisinformationDetector:
             from src.models.ensemble_detector import EnsembleDetector
 
             self.ensemble = EnsembleDetector(
-                self.config,
                 bert_model=self.bert_model,
-                bert_tokenizer=self.bert_tokenizer,
                 tfidf_model=self.tfidf_model,
                 nb_model=self.nb_model,
-                nb_vectorizer=self.nb_vectorizer,
+                bert_tokenizer=self.bert_tokenizer,
                 device=self.device,
             )
             self.logger.info("Ensemble initialised")

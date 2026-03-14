@@ -1,71 +1,75 @@
-models:
-  bert:
-    weight: 0.50
-    checkpoint: bert-base-uncased
-    max_length: 512
-    batch_size: 16
-    epochs: 5
-    learning_rate: 2.0e-5
-    dropout: 0.3
-    freeze_layers: 6
-  tfidf:
-    weight: 0.30
-    threshold: 0.5
-    max_features: 100000
-    ngram_range: [1, 3]
-    char_ngram_range: [2, 4]
-    hidden_layers: [512, 256, 128, 64]
-    epochs: 20
-    learning_rate: 1.0e-3
-    dropout: 0.4
-  naive_bayes:
-    weight: 0.20
-    alpha: 1.0
-    max_features: 50000
-    ngram_range: [1, 2]
-
-fuzzy:
-  defuzzification: centroid
-  threshold_suspicious: 0.45
-  threshold_misinformation: 0.65
-
-llm_judge:
-  host: http://localhost:11434
-  model: llama3
-  temperature: 0.1
-  max_tokens: 600
-  batch_size: 10
-  max_retries: 3
-  backoff_base: 2
-
 accuracy_gates:
   bert:
     accuracy: 0.78
-    precision: 0.76
     f1: 0.77
-  tfidf:
-    accuracy: 0.76
-    precision: 0.75
-    f1: 0.75
-  naive_bayes:
-    accuracy: 0.75
-    precision: 0.75
-    f1: 0.74
+    precision: 0.76
   ensemble:
     accuracy: 0.82
-    precision: 0.80
     f1: 0.81
-
-feedback:
-  high_error_threshold: 0.25
-  bert_update_lr: 5.0e-6
-  bert_update_steps: 3
-  tfidf_update_epochs: 2
-  min_f1_threshold: 0.75
-  consecutive_fail_limit: 3
-
+    precision: 0.8
+  naive_bayes:
+    accuracy: 0.75
+    f1: 0.74
+    precision: 0.75
+  tfidf:
+    accuracy: 0.76
+    f1: 0.75
+    precision: 0.75
 evaluation:
   output_dir: reports/
-  save_disagreements: true
   recalibrate_weights: true
-
+  save_disagreements: true
+feedback:
+  bert_update_lr: 5.0e-06
+  bert_update_steps: 3
+  consecutive_fail_limit: 3
+  high_error_threshold: 0.25
+  min_f1_threshold: 0.75
+  tfidf_update_epochs: 2
+fuzzy:
+  defuzzification: centroid
+  threshold_misinformation: 0.65
+  threshold_suspicious: 0.45
+llm_judge:
+  backoff_base: 2
+  batch_size: 10
+  host: http://localhost:11434
+  max_retries: 3
+  max_tokens: 600
+  model: llama3
+  temperature: 0.1
+models:
+  bert:
+    batch_size: 16
+    checkpoint: bert-base-uncased
+    dropout: 0.3
+    epochs: 5
+    freeze_layers: 6
+    learning_rate: 2.0e-05
+    max_length: 512
+    weight: 0.0
+  naive_bayes:
+    alpha: 1.0
+    max_features: 50000
+    ngram_range:
+    - 1
+    - 2
+    weight: 1.0
+  tfidf:
+    char_ngram_range:
+    - 2
+    - 4
+    dropout: 0.4
+    epochs: 20
+    hidden_layers:
+    - 512
+    - 256
+    - 128
+    - 64
+    learning_rate: 0.001
+    max_features: 100000
+    ngram_range:
+    - 1
+    - 3
+    threshold: 0.5
+    weight: 0.0

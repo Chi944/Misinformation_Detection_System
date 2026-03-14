@@ -22,9 +22,9 @@ from src.models.tfidf_model import TFIDFModel
 class EnsembleWeights:
     """Weights for the three base models."""
 
-    bert: float = 0.30
-    tfidf: float = 0.40
-    naive_bayes: float = 0.30
+    bert: float = 0.50
+    tfidf: float = 0.30
+    naive_bayes: float = 0.20
 
     def as_array(self) -> np.ndarray:
         w = np.asarray([self.bert, self.tfidf, self.naive_bayes], dtype="float32")
@@ -69,9 +69,9 @@ class EnsembleDetector:
         Redistributes proportionally when models are missing.
         """
         base = {
-            "bert": 0.30,
-            "tfidf": 0.40,
-            "naive_bayes": 0.30,
+            "bert": 0.50,
+            "tfidf": 0.30,
+            "naive_bayes": 0.20,
         }
         active: Dict[str, float] = {}
         if self.bert_model is not None and self.bert_tokenizer is not None:
@@ -137,7 +137,19 @@ class EnsembleDetector:
             nb_p = np.array([[0.5, 0.5]], dtype="float32")
 
         p1_bert = float(bert_p[0, 1])
-        p1_tfidf = float(tfidf_p[0, 1])
+        p1_tfidf_raw = float(tfidf_p[0, 1])
+        # Optional TF-IDF threshold calibration (config models.tfidf.threshold)
+        t = float(self.config.get("models", {}).get("tfidf", {}).get("threshold", 0.5))
+        if t <= 0 or t >= 1:
+            t = 0.5
+        if abs(t - 0.5) < 1e-6:
+            p1_tfidf = p1_tfidf_raw
+        else:
+            if p1_tfidf_raw <= t:
+                p1_tfidf = 0.5 * p1_tfidf_raw / t if t > 0 else 0.5
+            else:
+                p1_tfidf = 0.5 + 0.5 * (p1_tfidf_raw - t) / (1.0 - t) if t < 1 else 0.5
+            p1_tfidf = max(0.0, min(1.0, p1_tfidf))
         p1_nb = float(nb_p[0, 1])
 
         model_breakdown = {

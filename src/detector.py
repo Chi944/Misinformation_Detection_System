@@ -146,6 +146,7 @@ class MisinformationDetector:
             from src.models.ensemble_detector import EnsembleDetector
 
             self.ensemble = EnsembleDetector(
+                config=self.config,
                 bert_model=self.bert_model,
                 tfidf_model=self.tfidf_model,
                 nb_model=self.nb_model,
@@ -253,7 +254,7 @@ class MisinformationDetector:
                 "tfidf": {"label": 0, "confidence": 0.5},
                 "naive_bayes": {"label": 0, "confidence": 0.5},
             },
-            "ensemble_weights": {"bert": 0.30, "tfidf": 0.40, "naive_bayes": 0.30},
+            "ensemble_weights": {"bert": 0.50, "tfidf": 0.30, "naive_bayes": 0.20},
             "model_agreement": 1.0,
         }
 

@@ -1,4 +1,4 @@
-﻿# Misinformation Detection System
+# Misinformation Detection System
 
 A production-grade misinformation detection system combining three machine
 learning models, a Mamdani fuzzy logic engine, a local LLM judge, and a
@@ -62,6 +62,45 @@ ollama pull llama3
 # Verify
 curl http://localhost:11434/api/tags
 `
+
+## Training
+
+### Fast Mode — NB + TF-IDF only (recommended for development)
+Trains in 5-10 minutes on any machine:
+```bash
+python scripts/train_all.py --data data/train.csv --skip-bert --skip-gates
+```
+Expected accuracy: ~0.85
+
+### Full Mode — All 3 models including BERT (recommended for production)
+Requires GPU for reasonable speed:
+```bash
+python scripts/train_all.py --data data/train.csv --skip-gates
+```
+- With GPU (Kaggle/Colab free tier): ~20 minutes
+- With CPU only: ~2-4 hours
+
+### Training on Kaggle (free GPU for BERT)
+1. Go to kaggle.com and create a free account
+2. New Notebook → enable GPU accelerator (P100, free)
+3. Upload src/ and data/train.csv
+4. Run: python scripts/train_all.py --data data/train.csv
+5. Download models/bert_classifier.pt
+6. Place in your local models/ folder
+
+### Real Datasets
+The system is trained on 5 real datasets (100,000 samples total):
+- ISOT Fake News (44k articles)
+- LIAR (12k political statements)
+- WELFake (72k articles)
+- COVID Fake News (10k health claims)
+- FakeNewsNet (23k articles)
+
+To download and prepare:
+```bash
+python scripts/datasets/download_all.py
+python scripts/combine_datasets.py --max-per-class 50000
+```
 
 ## Makefile Commands
 

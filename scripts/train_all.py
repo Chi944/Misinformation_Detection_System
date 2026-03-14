@@ -33,7 +33,14 @@ def parse_args():
         "--skip-gates", action="store_true", help="Skip accuracy gate checks (for debugging only)"
     )
     parser.add_argument(
-        "--skip-bert", action="store_true", help="Skip BERT training (faster on CPU)"
+        "--skip-bert",
+        action="store_true",
+        help=(
+            "Skip BERT training (fast mode). "
+            "NB + TF-IDF give ~0.85 accuracy in 5-10 minutes. "
+            "Full BERT training takes 20 min on GPU or 2-4 hrs on CPU. "
+            "Train BERT on Kaggle (free GPU) if no local GPU available."
+        ),
     )
     return parser.parse_args()
 

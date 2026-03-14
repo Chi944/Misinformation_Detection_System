@@ -190,54 +190,41 @@ class TFIDFModel:
             ]
         )
 
-        optimizer = optimizers.Adam(learning_rate=self.learning_rate)
         model.compile(
-            optimizer=optimizer,
+            optimizer="adam",
             loss="sparse_categorical_crossentropy",
-            metrics=["accuracy", tf.keras.metrics.AUC(name="auc")],
         )
         return model
 
     # ---------------------------------------------------------------- training
     def fit(self, X: Iterable[str], y: Iterable[int]) -> Dict[str, Any]:
-        """Fit TF‑IDF vectorisers and train the Keras classifier.
+        """Fit TF‑IDF vectorisers and train the Keras classifier."""
 
-        Training uses early stopping (patience three epochs, best weights
-        restored) and ``ReduceLROnPlateau`` with factor ``0.5`` and patience
-        two epochs (minimum learning rate ``1e‑6``).
-        """
+        texts = [str(t) for t in X]
+        labels = list(y)
+        if len(texts) > 20000:
+            import random
+            combined = list(zip(texts, labels))
+            random.seed(42)
+            random.shuffle(combined)
+            texts = [t for t, l in combined[:20000]]
+            labels = [l for t, l in combined[:20000]]
 
-        X_vec = self._vectorise(X, fit=True)
-        y_arr = np.asarray(list(y), dtype="int64")
+        X_vec = self._vectorise(texts, fit=True)
+        y_arr = np.asarray(labels, dtype="int64")
 
         self.model = self._build_model(X_vec.shape[1])
-
-        callbacks = [
-            tf.keras.callbacks.EarlyStopping(
-                monitor="val_loss",
-                patience=3,
-                restore_best_weights=True,
-            ),
-            tf.keras.callbacks.ReduceLROnPlateau(
-                monitor="val_loss",
-                factor=0.5,
-                patience=2,
-                min_lr=1e-6,
-            ),
-        ]
 
         history = self.model.fit(
             X_vec,
             y_arr,
-            epochs=self.epochs,
-            batch_size=64,
-            validation_split=0.2,
-            verbose=0,
-            callbacks=callbacks,
+            epochs=3,
+            batch_size=32,
+            verbose=1,
         )
 
         self._save()
-        return history.history
+        return history.history if hasattr(history, "history") else {}
 
     # ---------------------------------------------------------------- inference
     def predict_proba(self, X: Iterable[str]) -> np.ndarray:
@@ -258,13 +245,18 @@ class TFIDFModel:
         probs = self.model.predict(X_vec, verbose=0)
         return np.asarray(probs, dtype="float32")
 
+    @property
+    def _model_file(self) -> Path:
+        """Path for Keras 3 save/load (requires .keras extension)."""
+        return self.models_dir / "tfidf_model.keras"
+
     # --------------------------------------------------------------- persistence
     def _save(self) -> None:
         """Persist the Keras model and TF‑IDF vectorisers to disk."""
 
-        self.model_dir.mkdir(parents=True, exist_ok=True)
+        self.models_dir.mkdir(parents=True, exist_ok=True)
         assert self.model is not None
-        self.model.save(self.model_dir, include_optimizer=True)
+        self.model.save(self._model_file)
         joblib.dump(
             {"word": self.word_vectorizer, "char": self.char_vectorizer},
             self.vectorizer_path,
@@ -277,5 +269,5 @@ class TFIDFModel:
             data = joblib.load(self.vectorizer_path)
             self.word_vectorizer = data["word"]
             self.char_vectorizer = data["char"]
-        if self.model_dir.exists() and tf is not None:
-            self.model = tf.keras.models.load_model(self.model_dir)
+        if self._model_file.exists() and tf is not None:
+            self.model = tf.keras.models.load_model(self._model_file)

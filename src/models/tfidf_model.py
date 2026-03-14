@@ -73,9 +73,15 @@ class TFIDFModel:
         char_ngram_range: Tuple[int, int] = (2, 4),
         learning_rate: float = 1e-3,
         epochs: int = 20,
+        config: Optional[Dict[str, Any]] = None,
     ) -> None:
         if tf is None:  # pragma: no cover
             raise ImportError("TensorFlow is required to use TFIDFModel.")
+
+        from src.utils.logger import get_logger
+
+        self.config = config or {}
+        self.logger = get_logger(__name__)
 
         self.models_dir = Path(models_dir)
         self.models_dir.mkdir(parents=True, exist_ok=True)
@@ -102,6 +108,63 @@ class TFIDFModel:
         )
 
         self.model: Optional["tf.keras.Model"] = None
+
+        self._try_load()
+
+    def _try_load(self) -> None:
+        """Load saved Keras model and vectorizers from disk if present."""
+        import os
+
+        keras_path = "models/tfidf_model.keras"
+        joblib_path = "models/tfidf_vectorizer.joblib"
+        pickle_path = "models/tfidf_vectorizer.pkl"
+
+        if os.path.exists(keras_path):
+            try:
+                import tensorflow as tf
+
+                self.model = tf.keras.models.load_model(keras_path)
+                self.logger.info(
+                    "TF-IDF Keras loaded from %s input=%s",
+                    keras_path,
+                    self.model.input_shape,
+                )
+            except Exception as e:  # pragma: no cover - best effort load
+                self.logger.warning("Could not load TF-IDF Keras: %s", e)
+
+        vecs = None
+        if os.path.exists(joblib_path):
+            try:
+                import joblib as _joblib
+
+                vecs = _joblib.load(joblib_path)
+                self.logger.info(
+                    "TF-IDF vectorizer loaded from %s", joblib_path
+                )
+            except Exception as e:  # pragma: no cover - best effort load
+                self.logger.warning("joblib load failed: %s", e)
+
+        if vecs is None and os.path.exists(pickle_path):
+            try:
+                import pickle
+
+                with open(pickle_path, "rb") as f:
+                    vecs = pickle.load(f)
+                self.logger.info(
+                    "TF-IDF vectorizer loaded from %s", pickle_path
+                )
+            except Exception as e:  # pragma: no cover - best effort load
+                self.logger.warning("pickle load failed: %s", e)
+
+        if vecs is not None:
+            self.word_vectorizer = vecs.get("word", self.word_vectorizer)
+            self.char_vectorizer = vecs.get("char", self.char_vectorizer)
+        else:
+            self.logger.warning(
+                "No TF-IDF vectorizer found at %s or %s",
+                joblib_path,
+                pickle_path,
+            )
 
     # ----------------------------------------------------------------- paths
     @property
@@ -242,14 +305,38 @@ class TFIDFModel:
 
         X_list = [str(t) for t in X]
         n = len(X_list)
-        if self.model is None:
-            self._load()
-        if self.model is None:
+        if self.model is None or self.word_vectorizer is None:
+            self.logger.warning(
+                "TFIDFModel not loaded - returning neutral 0.5"
+            )
             return np.full((n, 2), 0.5, dtype="float32")
 
-        X_vec = self._vectorise(X_list, fit=False)
-        probs = self.model.predict(X_vec, verbose=0)
-        return np.asarray(probs, dtype="float32")
+        try:
+            X_vec = self._vectorise(X_list, fit=False)
+            probs = self.model.predict(X_vec, verbose=0)
+            return np.asarray(probs, dtype="float32")
+        except Exception as e:  # pragma: no cover - safety net
+            self.logger.warning("TF-IDF predict failed: %s", e)
+            return np.full((n, 2), 0.5, dtype="float32")
+
+    def predict(self, texts: Iterable[str]) -> np.ndarray:
+        """Return P(misinfo) per text. Returns 0.5 if model not loaded."""
+
+        import numpy as np
+
+        texts_list = list(texts)
+        if self.model is None or self.word_vectorizer is None:
+            self.logger.warning(
+                "TFIDFModel not loaded - returning neutral 0.5"
+            )
+            return np.full(len(texts_list), 0.5)
+
+        try:
+            probs = self.predict_proba(texts_list)
+            return probs[:, 1]
+        except Exception as e:  # pragma: no cover - safety net
+            self.logger.warning("TF-IDF predict failed: %s", e)
+            return np.full(len(texts_list), 0.5)
 
     @property
     def _model_file(self) -> Path:

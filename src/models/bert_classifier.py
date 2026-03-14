@@ -130,6 +130,7 @@ class BERTTrainer:
         freeze_layers: int = 6,
         learning_rate: float = 2e-5,
         epochs: int = 3,
+        class_weights: Optional[torch.Tensor] = None,
     ) -> None:
         self.model = model
         self.tokenizer = tokenizer
@@ -146,7 +147,11 @@ class BERTTrainer:
         self._freeze_encoder_layers(self.config.freeze_layers)
 
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.config.learning_rate)
-        self.criterion = nn.CrossEntropyLoss()
+        self.criterion = (
+            nn.CrossEntropyLoss(weight=class_weights.to(self.device))
+            if class_weights is not None
+            else nn.CrossEntropyLoss()
+        )
         self.scaler = GradScaler(enabled=self.device.type == "cuda")
 
     # ----------------------------------------------------------------- internals

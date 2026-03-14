@@ -176,6 +176,7 @@ class MasterTrainer:
             try:
                 self.logger.info("Training BERT...")
                 import torch
+                from torch.nn import functional as F
                 from transformers import BertTokenizer
 
                 from src.models.bert_classifier import BERTMisinformationClassifier
@@ -197,6 +198,19 @@ class MasterTrainer:
                     epochs = cfg["epochs"]
                 batch_sz = cfg.get("batch_size", 16)
                 batch_sz = min(batch_sz, 32)
+
+                # Class weights to avoid collapse when train set is imbalanced (e.g. on Kaggle)
+                train_labels_arr = np.asarray(train_labels, dtype=np.int64)
+                n0 = int((train_labels_arr == 0).sum())
+                n1 = int((train_labels_arr == 1).sum())
+                total = len(train_labels_arr)
+                w0 = total / (2.0 * max(1, n0))
+                w1 = total / (2.0 * max(1, n1))
+                class_weights = torch.tensor([w0, w1], dtype=torch.float32).to(device)
+                self.logger.info(
+                    "BERT class weights (0=credible, 1=misinfo): n0=%d n1=%d -> [%.4f, %.4f]",
+                    n0, n1, w0, w1,
+                )
 
                 model.train()
                 for epoch in range(epochs):
@@ -222,7 +236,7 @@ class MasterTrainer:
                         lbls = torch.tensor(list(bl), dtype=torch.long).to(device)
                         optimizer.zero_grad()
                         logits = model.model(input_ids=ids, attention_mask=mask).logits
-                        loss = torch.nn.functional.cross_entropy(logits, lbls)
+                        loss = F.cross_entropy(logits, lbls, weight=class_weights)
                         loss.backward()
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                         optimizer.step()

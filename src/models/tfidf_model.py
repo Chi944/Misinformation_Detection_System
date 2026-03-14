@@ -112,58 +112,68 @@ class TFIDFModel:
         self._try_load()
 
     def _try_load(self) -> None:
-        """Load saved Keras model and vectorizers from disk if present."""
+        """Load saved Keras model and vectorizers from disk."""
         import os
 
-        keras_path = "models/tfidf_model.keras"
-        joblib_path = "models/tfidf_vectorizer.joblib"
-        pickle_path = "models/tfidf_vectorizer.pkl"
+        # Compute absolute path to project root
+        this_file = os.path.abspath(__file__)
+        # src/models/tfidf_model.py -> go up 2 levels to project root
+        project_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(this_file))
+        )
 
+        keras_path = os.path.join(project_root, "models", "tfidf_model.keras")
+        joblib_path = os.path.join(
+            project_root, "models", "tfidf_vectorizer.joblib"
+        )
+
+        self.logger.info("TFIDFModel: project_root=%s", project_root)
+        self.logger.info("TFIDFModel: keras_path=%s", keras_path)
+
+        # Load Keras model
         if os.path.exists(keras_path):
             try:
                 import tensorflow as tf
 
                 self.model = tf.keras.models.load_model(keras_path)
+                input_dim = self.model.input_shape[-1]
                 self.logger.info(
-                    "TF-IDF Keras loaded from %s input=%s",
-                    keras_path,
-                    self.model.input_shape,
+                    "TF-IDF Keras loaded: input_dim=%d", input_dim
                 )
-            except Exception as e:  # pragma: no cover - best effort load
-                self.logger.warning("Could not load TF-IDF Keras: %s", e)
+                if input_dim < 1000:
+                    self.logger.warning(
+                        "TF-IDF Keras input_dim=%d looks like test model",
+                        input_dim,
+                    )
+            except Exception as e:
+                self.logger.warning("TF-IDF Keras load failed: %s", e)
+        else:
+            self.logger.warning("TF-IDF Keras not found: %s", keras_path)
 
-        vecs = None
+        # Load vectorizers - joblib only (pickle kept corrupting)
         if os.path.exists(joblib_path):
             try:
-                import joblib as _joblib
+                import joblib
 
-                vecs = _joblib.load(joblib_path)
+                vecs = joblib.load(joblib_path)
+                self.word_vectorizer = vecs.get("word")
+                self.char_vectorizer = vecs.get("char")
+                # Verify
+                import numpy as np
+
+                w = self.word_vectorizer.transform(["test"]).toarray()
+                c = self.char_vectorizer.transform(["test"]).toarray()
+                shape = np.hstack([w, c]).shape
                 self.logger.info(
-                    "TF-IDF vectorizer loaded from %s", joblib_path
+                    "TF-IDF vectorizer loaded: shape=%s", shape
                 )
-            except Exception as e:  # pragma: no cover - best effort load
-                self.logger.warning("joblib load failed: %s", e)
-
-        if vecs is None and os.path.exists(pickle_path):
-            try:
-                import pickle
-
-                with open(pickle_path, "rb") as f:
-                    vecs = pickle.load(f)
-                self.logger.info(
-                    "TF-IDF vectorizer loaded from %s", pickle_path
+            except Exception as e:
+                self.logger.warning(
+                    "TF-IDF vectorizer load failed: %s", e
                 )
-            except Exception as e:  # pragma: no cover - best effort load
-                self.logger.warning("pickle load failed: %s", e)
-
-        if vecs is not None:
-            self.word_vectorizer = vecs.get("word", self.word_vectorizer)
-            self.char_vectorizer = vecs.get("char", self.char_vectorizer)
         else:
             self.logger.warning(
-                "No TF-IDF vectorizer found at %s or %s",
-                joblib_path,
-                pickle_path,
+                "TF-IDF vectorizer not found: %s", joblib_path
             )
 
     # ----------------------------------------------------------------- paths
@@ -215,17 +225,14 @@ class TFIDFModel:
 
         return np.asarray(feat_rows, dtype="float32")
 
-    def _vectorise(self, X: Iterable[str], fit: bool = False) -> np.ndarray:
-        """Vectorise raw texts using only TF‑IDF features.
+    def _vectorise(self, texts: Iterable[str], fit: bool = False) -> np.ndarray:
+        """Vectorise raw texts to word+char TF-IDF dense array."""
+        import numpy as np
+        from scipy.sparse import hstack as sp_hstack
 
-        The current deployed Keras model was trained on a feature space
-        consisting solely of concatenated word‑ and char‑level TF‑IDF
-        vectors. To keep the runtime representation consistent with the
-        saved model, we no longer append the additional numeric features
-        computed by ``_extra_features`` here.
-        """
+        # Force all inputs to plain strings - prevents csr_matrix bug
+        texts = [str(t) for t in texts]
 
-        texts: List[str] = [str(t) for t in X]
         if fit:
             X_word = self.word_vectorizer.fit_transform(texts)
             X_char = self.char_vectorizer.fit_transform(texts)
@@ -233,11 +240,9 @@ class TFIDFModel:
             X_word = self.word_vectorizer.transform(texts)
             X_char = self.char_vectorizer.transform(texts)
 
-        from scipy.sparse import hstack  # local import
-
-        tfidf_sparse = hstack([X_word, X_char]).astype("float32")
-        tfidf_dense = tfidf_sparse.toarray()
-        return tfidf_dense
+        return sp_hstack(
+            [X_word, X_char], format="csr"
+        ).toarray().astype("float32")
 
     def _build_model(self, input_dim: int) -> "tf.keras.Model":
         """Construct and compile the Keras classifier for the given input size."""

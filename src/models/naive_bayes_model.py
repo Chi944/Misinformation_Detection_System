@@ -169,7 +169,9 @@ class TFNaiveBayesWrapper(tf.Module):
             self._load()
         assert self._calibrated_clf is not None
 
-        X_vec = self.vectorizer.transform(list(texts))
+        # Force plain strings so vectorizer never sees sparse/dense arrays
+        docs = [str(t) for t in texts]
+        X_vec = self.vectorizer.transform(docs)
         proba = self._calibrated_clf.predict_proba(X_vec)
         return np.asarray(proba, dtype="float32")
 

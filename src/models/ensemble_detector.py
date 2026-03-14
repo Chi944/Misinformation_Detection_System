@@ -102,6 +102,8 @@ class EnsembleDetector:
             - ``ensemble_weights``: Current weights as a mapping.
         """
 
+        # Ensure we always pass strings; avoid passing any sparse/dense arrays
+        text = str(text) if not isinstance(text, str) else text
         texts = [text]
 
         bert_p = np.array([[0.5, 0.5]], dtype="float32")

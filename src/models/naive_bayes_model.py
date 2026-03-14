@@ -177,6 +177,18 @@ class TFNaiveBayesWrapper(tf.Module):
         """Public API for ensemble: return class probabilities as NumPy array."""
         return self._predict_proba_numpy(texts)
 
+    def predict_proba(self, texts: Iterable[str]) -> np.ndarray:
+        """
+        Return probability array shape (n, 2) for sklearn-style compatibility.
+
+        Args:
+            texts: Iterable of input text samples.
+        Returns:
+            NumPy array of shape (n, 2): [P(credible), P(misinfo)].
+        """
+
+        return self._predict_proba_numpy(texts)
+
     @tf.function  # type: ignore[arg-type]
     def predict(self, texts: "tf.Tensor") -> "tf.Tensor":
         """TensorFlow‑compatible prediction function.

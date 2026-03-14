@@ -106,8 +106,8 @@
 - [x] 16.5 Download FakeNewsNet dataset from GitHub
 - [x] 16.6 Run: python scripts/datasets/download_all.py
 - [x] 16.7 Run: python scripts/combine_datasets.py
-- [ ] 16.8 Run: python scripts/train_all.py --data data/train.csv
-- [ ] 16.9 Run: python scripts/evaluate.py (verify gates pass on real data)
+- [x] 16.8 Run: python scripts/train_all.py --data data/train.csv
+- [x] 16.9 Run: python scripts/evaluate.py (verify gates pass on real data)
 - [x] 16.10 Run: python scripts/run_feedback_cycle.py
 
 ## PHASE 17: Optional Enhancements

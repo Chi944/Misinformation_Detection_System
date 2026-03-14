@@ -153,7 +153,14 @@ class TFIDFModel:
         return np.asarray(feat_rows, dtype="float32")
 
     def _vectorise(self, X: Iterable[str], fit: bool = False) -> np.ndarray:
-        """Vectorise raw texts and append engineered numeric features."""
+        """Vectorise raw texts using only TF‑IDF features.
+
+        The current deployed Keras model was trained on a feature space
+        consisting solely of concatenated word‑ and char‑level TF‑IDF
+        vectors. To keep the runtime representation consistent with the
+        saved model, we no longer append the additional numeric features
+        computed by ``_extra_features`` here.
+        """
 
         texts: List[str] = [str(t) for t in X]
         if fit:
@@ -167,8 +174,7 @@ class TFIDFModel:
 
         tfidf_sparse = hstack([X_word, X_char]).astype("float32")
         tfidf_dense = tfidf_sparse.toarray()
-        extra = self._extra_features(texts)
-        return np.concatenate([tfidf_dense, extra], axis=1)
+        return tfidf_dense
 
     def _build_model(self, input_dim: int) -> "tf.keras.Model":
         """Construct and compile the Keras classifier for the given input size."""

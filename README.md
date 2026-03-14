@@ -23,9 +23,9 @@ Evaluated on 500 real test samples (ISOT + LIAR + WELFake datasets):
 | Model | Accuracy | F1 | Weight |
 |---|---|---|---|
 | BERT (fine-tuned) | 0.556 | 0.560 | 50% |
-| TF-IDF DNN | 0.646 | 0.664 | 30% |
+| TF-IDF DNN (80k) | 0.648 | 0.600 | 30% |
 | Naive Bayes | 0.634 | 0.623 | 20% |
-| Ensemble | 0.622 | 0.629 | - |
+| Ensemble | 0.584 | 0.587 | - |
 
 Training data: 80,000 samples from ISOT, LIAR, WELFake.
 BERT fine-tuned on Kaggle GPU (Tesla T4).

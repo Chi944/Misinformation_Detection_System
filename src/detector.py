@@ -253,7 +253,7 @@ class MisinformationDetector:
                 "tfidf": {"label": 0, "confidence": 0.5},
                 "naive_bayes": {"label": 0, "confidence": 0.5},
             },
-            "ensemble_weights": {"bert": 0.5, "tfidf": 0.3, "naive_bayes": 0.2},
+            "ensemble_weights": {"bert": 0.30, "tfidf": 0.40, "naive_bayes": 0.30},
             "model_agreement": 1.0,
         }
 

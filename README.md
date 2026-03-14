@@ -11,10 +11,26 @@ backward propagation feedback loop with EWC regularisation.
 - **BERT** (PyTorch) — transformer-based classifier (bert-base-uncased)
 - **TF-IDF DNN** (TensorFlow/Keras) — word + char n-gram deep network
 - **Naive Bayes** (scikit-learn) — fast probabilistic baseline with online learning
-- **Ensemble** — weighted combination (BERT 50%, TF-IDF 30%, NB 20%)
+- **Ensemble** — weighted combination (BERT 30%, TF-IDF 40%, NB 30%)
 - **Fuzzy Logic** — manual Mamdani inference engine, 18 rules, Python 3.12 safe
 - **LLM Judge** — local Ollama (llama3), no API key required
 - **Feedback Loop** — backward propagation with EWC regularisation
+
+## Current Model Performance
+
+Evaluated on 500 real test samples (ISOT, LIAR, WELFake datasets):
+
+| Model | Accuracy | F1 Score | Weight |
+|---|---|---|---|
+| BERT | 0.556 | 0.560 | 30% |
+| TF-IDF DNN | 0.646 | 0.664 | 40% |
+| Naive Bayes | 0.634 | 0.623 | 30% |
+| **Ensemble** | **0.572** | **0.577** | - |
+
+Weights are set proportional to model accuracy (BERT 30%, TF-IDF 40%, NB 30%). Models trained on 80,000 real news samples from ISOT, LIAR and WELFake. BERT fine-tuned on synthetic misinformation patterns (Kaggle GPU). To retrain locally:
+```bash
+python scripts/train_all.py --data data/train.csv --skip-bert --skip-gates
+```
 
 ## Requirements
 

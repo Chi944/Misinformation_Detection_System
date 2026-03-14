@@ -22,9 +22,9 @@ from src.models.tfidf_model import TFIDFModel
 class EnsembleWeights:
     """Weights for the three base models."""
 
-    bert: float = 0.5
-    tfidf: float = 0.3
-    naive_bayes: float = 0.2
+    bert: float = 0.30
+    tfidf: float = 0.40
+    naive_bayes: float = 0.30
 
     def as_array(self) -> np.ndarray:
         w = np.asarray([self.bert, self.tfidf, self.naive_bayes], dtype="float32")
@@ -69,9 +69,9 @@ class EnsembleDetector:
         Redistributes proportionally when models are missing.
         """
         base = {
-            "bert": 0.50,
-            "tfidf": 0.30,
-            "naive_bayes": 0.20,
+            "bert": 0.30,
+            "tfidf": 0.40,
+            "naive_bayes": 0.30,
         }
         active: Dict[str, float] = {}
         if self.bert_model is not None and self.bert_tokenizer is not None:

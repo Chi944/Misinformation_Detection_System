@@ -99,16 +99,16 @@
 - [x] 15.14 Run: git push origin main
 
 ## PHASE 16: Real Data Integration
-- [ ] 16.1 Download ISOT dataset from Kaggle
-- [ ] 16.2 Download LIAR dataset from HuggingFace
-- [ ] 16.3 Download WELFake dataset from Zenodo
-- [ ] 16.4 Download COVID Fake News dataset from HuggingFace
-- [ ] 16.5 Download FakeNewsNet dataset from GitHub
-- [ ] 16.6 Run: python scripts/datasets/download_all.py
-- [ ] 16.7 Run: python scripts/combine_datasets.py
+- [x] 16.1 Download ISOT dataset from Kaggle
+- [x] 16.2 Download LIAR dataset from HuggingFace
+- [x] 16.3 Download WELFake dataset from Zenodo
+- [x] 16.4 Download COVID Fake News dataset from HuggingFace
+- [x] 16.5 Download FakeNewsNet dataset from GitHub
+- [x] 16.6 Run: python scripts/datasets/download_all.py
+- [x] 16.7 Run: python scripts/combine_datasets.py
 - [ ] 16.8 Run: python scripts/train_all.py --data data/train.csv
 - [ ] 16.9 Run: python scripts/evaluate.py (verify gates pass on real data)
-- [ ] 16.10 Run: python scripts/run_feedback_cycle.py
+- [x] 16.10 Run: python scripts/run_feedback_cycle.py
 
 ## PHASE 17: Optional Enhancements
 - [ ] 17.1 Add a REST API endpoint using FastAPI

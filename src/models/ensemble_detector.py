@@ -45,19 +45,45 @@ class EnsembleDetector:
 
     def __init__(
         self,
+        config: Optional[Dict[str, Any]] = None,
         bert_model: Optional[BERTMisinformationClassifier] = None,
         tfidf_model: Optional[TFIDFModel] = None,
         nb_model: Optional[TFNaiveBayesWrapper] = None,
         weights: Optional[EnsembleWeights] = None,
         bert_tokenizer=None,
+        nb_vectorizer=None,
         device: Optional[str] = None,
     ) -> None:
+        self.config = config or {}
         self.bert_model = bert_model
         self.tfidf_model = tfidf_model
         self.nb_model = nb_model
         self.weights = weights or EnsembleWeights()
         self.bert_tokenizer = bert_tokenizer
+        self.nb_vectorizer = nb_vectorizer
         self.device = device or "cpu"
+
+    def _get_active_weights(self) -> Dict[str, float]:
+        """
+        Return weights for only the models that are loaded.
+        Redistributes proportionally when models are missing.
+        """
+        base = {
+            "bert": 0.50,
+            "tfidf": 0.30,
+            "naive_bayes": 0.20,
+        }
+        active: Dict[str, float] = {}
+        if self.bert_model is not None and self.bert_tokenizer is not None:
+            active["bert"] = base["bert"]
+        if self.tfidf_model is not None:
+            active["tfidf"] = base["tfidf"]
+        if self.nb_model is not None:
+            active["naive_bayes"] = base["naive_bayes"]
+        if not active:
+            return base
+        total = sum(active.values())
+        return {k: v / total for k, v in active.items()}
 
     # ----------------------------------------------------------------- predict
     def predict(self, text: str) -> Dict[str, Any]:
@@ -104,22 +130,27 @@ class EnsembleDetector:
             tfidf_p = np.array([[0.5, 0.5]], dtype="float32")
 
         if self.nb_model is not None:
-            # Wrapper exposes a NumPy-based helper for probabilities
             nb_p = self.nb_model.predict_proba_np(texts)
         else:
             nb_p = np.array([[0.5, 0.5]], dtype="float32")
 
-        # Extract probability of class 1 for each model
         p1_bert = float(bert_p[0, 1])
         p1_tfidf = float(tfidf_p[0, 1])
         p1_nb = float(nb_p[0, 1])
 
-        weights = self.weights.as_array()
-        p1_ensemble = float(weights[0] * p1_bert + weights[1] * p1_tfidf + weights[2] * p1_nb)
+        model_breakdown = {
+            "bert": {"label": int(p1_bert >= 0.5), "confidence": p1_bert},
+            "tfidf": {"label": int(p1_tfidf >= 0.5), "confidence": p1_tfidf},
+            "naive_bayes": {"label": int(p1_nb >= 0.5), "confidence": p1_nb},
+        }
+
+        weights = self._get_active_weights()
+        p1_ensemble = float(
+            sum(weights.get(name, 0.0) * model_breakdown[name]["confidence"] for name in weights)
+        )
 
         crisp_label = "misinformation" if p1_ensemble >= 0.5 else "credible"
 
-        # Agreement: fraction of base models whose own crisp label matches ensemble.
         def label_from_p1(p1: float) -> str:
             return "misinformation" if p1 >= 0.5 else "credible"
 
@@ -130,17 +161,7 @@ class EnsembleDetector:
         ]
         agreement = float(sum(label == crisp_label for label in labels) / len(labels))
 
-        weights_dict = {
-            "bert": float(self.weights.bert),
-            "tfidf": float(self.weights.tfidf),
-            "naive_bayes": float(self.weights.naive_bayes),
-        }
-
-        model_breakdown = {
-            "bert": {"label": int(p1_bert >= 0.5), "confidence": p1_bert},
-            "tfidf": {"label": int(p1_tfidf >= 0.5), "confidence": p1_tfidf},
-            "naive_bayes": {"label": int(p1_nb >= 0.5), "confidence": p1_nb},
-        }
+        weights_dict = {k: float(v) for k, v in weights.items()}
 
         return {
             "bert_proba": bert_p[0].tolist(),

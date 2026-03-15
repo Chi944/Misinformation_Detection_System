@@ -11,7 +11,7 @@ backward propagation feedback loop with EWC regularisation.
 - **BERT** (PyTorch) — transformer-based classifier (bert-base-uncased)
 - **TF-IDF DNN** (TensorFlow/Keras) — word + char n-gram deep network
 - **Naive Bayes** (scikit-learn) — fast probabilistic baseline with online learning
-- **Ensemble** — weighted combination (weights from grid search on val; current: NB-only)
+- **Ensemble** — weighted combination (weights from grid search on val with all 3 models: BERT 0.1, TF-IDF 0.2, NB 0.7)
 - **Fuzzy Logic** — manual Mamdani inference engine, 18 rules, Python 3.12 safe
 - **LLM Judge** — local Ollama (llama3), no API key required
 - **Feedback Loop** — backward propagation with EWC regularisation
@@ -22,12 +22,12 @@ Evaluated on 500 real test samples (ISOT + LIAR + WELFake datasets):
 
 | Model | Accuracy | F1 | Weight |
 |---|---|---|---|
-| BERT (fine-tuned) | 0.556 | 0.560 | 0% |
-| TF-IDF DNN (80k) | 0.648 | 0.600 | 0% |
-| Naive Bayes | 0.634 | 0.623 | 100% |
-| Ensemble | 0.634 | 0.623 | - |
+| BERT (fine-tuned) | 0.556 | 0.560 | 10% |
+| TF-IDF DNN (80k) | 0.648 | 0.600 | 20% |
+| Naive Bayes | 0.634 | 0.623 | 70% |
+| Ensemble | 0.656 | 0.633 | 0.1+0.2+0.7 |
 
-Weights from grid search on validation set (optimal: NB-only on 100-sample val with TF-IDF fallback).
+Weights from grid search on validation set with all three models contributing (TF-IDF retrained to match 80k-dim vectorizer).
 
 Training data: 80,000 samples from ISOT, LIAR, WELFake.
 BERT fine-tuned on Kaggle GPU (Tesla T4).

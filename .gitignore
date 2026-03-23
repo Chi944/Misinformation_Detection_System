@@ -27,3 +27,8 @@ data/*.json
 data/*.parquet
 data/*.tsv
 !data/README.md
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/

@@ -16,27 +16,21 @@ backward propagation feedback loop with EWC regularisation.
 - **LLM Judge** — local Ollama (llama3), no API key required
 - **Feedback Loop** — backward propagation with EWC regularisation
 
-## Current Model Performance
+## Model Performance
 
-Evaluated on 500 real test samples (ISOT + LIAR + WELFake datasets):
+Evaluated on 500 held-out test samples (ISOT + LIAR + WELFake datasets).
+Weights optimised via grid search on validation set.
 
 | Model | Accuracy | F1 | Weight |
 |---|---|---|---|
-| BERT (LIAR fine-tuned) | 0.494 | 0.329 | 20% |
-| TF-IDF DNN (80k) | 0.662 | 0.689 | 70% |
-| Naive Bayes | 0.634 | 0.623 | 10% |
-| Ensemble | 0.648 | 0.655 | 0.2+0.7+0.1 |
+| BERT (LIAR fine-tuned) | 0.494 | 0.329 | 10% |
+| TF-IDF DNN | 0.654 | 0.707 | 60% |
+| Naive Bayes | 0.634 | 0.623 | 30% |
+| **Ensemble** | **0.662** | **0.665** | - |
 
-Weights from grid search on validation: `python scripts/grid_search_val_weights.py` (optional `GRID_VAL_MAX` env for a subsample). BERT: `BERTClassifier` in `src/models/bert_classifier.py` (BertModel + pooler + linear), weights in `models/bert_classifier.pt`. Re-evaluate test subset: `python scripts/eval_500_test.py`.
-
-Training data: 80,000 samples from ISOT, LIAR, WELFake.
-BERT: LIAR-style fine-tune; same architecture as Colab training.
-
-To retrain:
-```bash
-python scripts/train_all.py --data data/train.csv --skip-bert --skip-gates
-# For BERT: use Kaggle notebook in scripts/kaggle_bert_training.py
-```
+Ensemble weights (bert=0.1, tfidf=0.6, nb=0.3) found via grid search on val set.
+Trained on 80,000 samples from ISOT, LIAR and WELFake.
+0 prediction errors on 500-sample test evaluation.
 
 ## Requirements
 

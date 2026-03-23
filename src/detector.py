@@ -3,6 +3,8 @@ import os
 import yaml
 
 from src.utils.logger import get_logger
+from src.utils.domain_credibility import DomainCredibility
+from src.utils.explainability import Explainability
 
 
 class MisinformationDetector:
@@ -40,6 +42,10 @@ class MisinformationDetector:
         self.llm_judge = None
         self.eval_pipeline = None
         self.git_manager = None
+
+        # Phase 17 enhancements
+        self.domain_credibility = DomainCredibility()
+        self.explainability = Explainability()
 
         self._init_fuzzy()
 
@@ -199,20 +205,80 @@ class MisinformationDetector:
         except Exception as e:
             self.logger.warning("Git manager init failed: %s", e)
 
-    def predict(self, text):
+    def predict(self, text, url=None, explain=False):
         """
         Run full prediction on one text sample.
 
         Args:
             text (str): input text to classify
+            url (str, optional): source URL; used to adjust probability based
+                on domain credibility.
+            explain (bool): if True, include word-level explainability output.
         Returns:
             dict: crisp_label, ensemble_probability, fuzzy_score,
-                  model_breakdown, ensemble_weights, model_agreement
+                  model_breakdown, ensemble_weights, model_agreement,
+                  optionally `source_credibility` and `explanation`.
         """
         if self.ensemble is None:
-            return self._fallback_predict(text)
+            result = self._fallback_predict(text)
+        else:
+            result = self.ensemble.predict(text)
 
-        result = self.ensemble.predict(text)
+        # Phase 17.4: domain credibility adjustment
+        try:
+            original_prob = float(result.get("ensemble_probability", 0.5))
+
+            # Only adjust if we have a URL or we can find a domain in the text.
+            domain_hint = url if url else self.domain_credibility.extract_domain(text)
+            if url is not None or domain_hint is not None:
+                score = self.domain_credibility.get_score(url or domain_hint)
+                domain = (
+                    self.domain_credibility.extract_domain(url)
+                    if url is not None
+                    else domain_hint
+                )
+                adjusted_prob = self.domain_credibility.adjust_probability(
+                    original_prob, url or domain_hint
+                )
+                adjusted_flag = abs(float(adjusted_prob) - float(original_prob)) > 1e-9
+
+                result["ensemble_probability"] = float(adjusted_prob)
+                result["crisp_label"] = (
+                    "misinformation" if result["ensemble_probability"] >= 0.5 else "credible"
+                )
+
+                crisp_int = 1 if result["crisp_label"] == "misinformation" else 0
+                labels = [
+                    int(result["model_breakdown"]["bert"]["label"]),
+                    int(result["model_breakdown"]["tfidf"]["label"]),
+                    int(result["model_breakdown"]["naive_bayes"]["label"]),
+                ]
+                result["model_agreement"] = float(sum(l == crisp_int for l in labels) / len(labels))
+
+                result["source_credibility"] = {
+                    "domain": domain,
+                    "score": float(score),
+                    "label": self.domain_credibility.get_label(score),
+                    "adjusted": bool(adjusted_flag),
+                }
+        except Exception as e:  # pragma: no cover - defensive
+            self.logger.warning("Source credibility adjustment failed: %s", e)
+
+        # Optional phase 17.5: explainability
+        if explain:
+            try:
+                result["explanation"] = self.explainability.explain(
+                    text,
+                    tfidf_model=self.tfidf_model,
+                    nb_model=self.nb_model,
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                self.logger.warning("Explainability failed: %s", e)
+                result["explanation"] = {
+                    "method": "none",
+                    "top_words": [],
+                    "explanation": "Explanation not available.",
+                }
 
         if self.fuzzy_engine is not None:
             result["fuzzy_score"] = self.fuzzy_engine.compute(

@@ -38,7 +38,7 @@ llm_judge:
   host: http://localhost:11434
   max_retries: 3
   max_tokens: 600
-  model: llama3
+  model: mistral
   temperature: 0.1
 models:
   bert:

@@ -48,10 +48,15 @@ class LLMJudge:
         self.model = model
         self.host = host.rstrip("/")
         self.logger = get_logger(__name__)
+        self.available_models: list[str] = []
         self._verify_connection()
 
     def _verify_connection(self):
-        """Verify Ollama is running and model is available."""
+        """Verify Ollama is running.
+
+        Model availability is not enforced here so that evaluation can fall
+        back across multiple candidate models at call time.
+        """
         try:
             resp = requests.get("%s/api/tags" % self.host, timeout=5)
             resp.raise_for_status()
@@ -60,13 +65,52 @@ class LLMJudge:
         except Exception as e:
             raise RuntimeError("Ollama health check failed: %s" % e)
 
-        available = [m.get("name", "") for m in resp.json().get("models", [])]
-        if not any(self.model in name for name in available):
-            raise RuntimeError(
-                "Model '%s' not found. Run: ollama pull %s\n"
-                "Available: %s" % (self.model, self.model, available)
-            )
-        self.logger.info("LLMJudge ready - model=%s host=%s", self.model, self.host)
+        self.available_models = [m.get("name", "") for m in resp.json().get("models", [])]
+        self.logger.info(
+            "LLMJudge ready - preferred_model=%s host=%s (available_models=%d)",
+            self.model,
+            self.host,
+            len(self.available_models),
+        )
+
+    def _call_ollama(self, prompt):
+        """Call Ollama with model fallback across several candidates."""
+        models_to_try = [
+            self.model or "mistral",
+            "mistral",
+            "llama3",
+            "llama2",
+        ]
+
+        # Deduplicate while preserving order
+        seen = set()
+        models_to_try = [m for m in models_to_try if not (m in seen or seen.add(m))]
+
+        for model_name in models_to_try:
+            try:
+                # If we already know available models, skip obvious misses.
+                if self.available_models and not any(model_name in name for name in self.available_models):
+                    continue
+
+                response = requests.post(
+                    "%s/api/generate" % self.host,
+                    json={
+                        "model": model_name,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {"temperature": 0.1, "num_predict": 400},
+                    },
+                    timeout=120,
+                )
+                if response.status_code == 200:
+                    self.logger.info("LLM judge using model: %s", model_name)
+                    return response.json().get("response", "")
+            except Exception as e:
+                self.logger.warning("Model %s failed: %s", model_name, e)
+                continue
+
+        self.logger.warning("All Ollama models failed")
+        return None
 
     def _build_prompt(self, text, predictions, fuzzy_score, cycle_metrics=None):
         """Build evaluation prompt for the judge model."""
@@ -140,18 +184,10 @@ class LLMJudge:
         """
         prompt = self._build_prompt(text, predictions, fuzzy_score, cycle_metrics)
         try:
-            resp = requests.post(
-                "%s/api/generate" % self.host,
-                json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {"temperature": 0.1, "num_predict": 400},
-                },
-                timeout=120,
-            )
-            resp.raise_for_status()
-            raw = resp.json().get("response", "").strip()
+            raw = self._call_ollama(prompt)
+            if raw is None:
+                raise RuntimeError("Ollama call returned None")
+            raw = raw.strip()
             return self._parse_response(raw)
         except Exception as e:
             self.logger.warning("evaluate_single failed: %s - returning fallback", e)

@@ -55,6 +55,27 @@ python -c "import os; files=['models/bert_classifier.pt','models/tfidf_model.ker
 
 ## Running the System
 
+### Deployment Target
+
+- Production: HuggingFace Spaces (Docker)
+  https://huggingface.co/spaces/werty3684/misinformation-detector
+- Ports:
+  - Local run: `8000`
+  - Production container: `7860`
+
+### Deploy to GitHub + HuggingFace
+
+From project root:
+
+```powershell
+.\deploy.ps1 "Your commit message here"
+```
+
+This script:
+- commits/pushes current repo to `origin main`
+- syncs deployment artifacts to `C:\Users\Desto\hf-deploy`
+- commits/pushes `hf-deploy` to `huggingface main`
+
 ### Option A: Python Shell
 
 ```python
@@ -69,6 +90,16 @@ print(result["crisp_label"], result["ensemble_probability"])
 ```bash
 python -c "from src.detector import MisinformationDetector; d=MisinformationDetector(config='config.yaml'); print(d.predict('SHOCKING cover-up exposed by insiders today', explain=True))"
 ```
+
+### Option C: API + Frontend (local)
+
+```bash
+python api.py
+```
+
+Open:
+- API: http://localhost:8000/health
+- Frontend: http://localhost:8000/app
 
 ---
 

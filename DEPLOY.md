@@ -1,72 +1,80 @@
-# How to share your app anywhere for free using ngrok
+# Deployment (HuggingFace Spaces - Docker)
 
-## Option 1: ngrok (Recommended - instant, no deployment needed)
+Production deployment platform:
 
-ngrok creates a public URL that tunnels to your local app.
-Anyone with the URL can access it while your machine is running.
+- Space: https://huggingface.co/spaces/werty3684/misinformation-detector
+- Runtime: Docker
+- Production port: `7860`
+- Local development port: `8000`
 
-### Setup (one time)
+---
 
-1. Go to https://ngrok.com and create a free account
-2. Download ngrok for Windows from https://ngrok.com/download
-3. Extract ngrok.exe to your project folder
-4. Get your auth token from https://dashboard.ngrok.com/get-started/your-authtoken
-5. Run: `ngrok config add-authtoken 3BM0xQ4hMX63j26xDjwAmg7FD0O_397qFmxUDFFNQAVQTY6fr`
+## Port behavior
 
-### Run your app and share it
+The API is configured to run on:
 
-Terminal 1 - Start the API:
+- **Local:** `8000`
+- **HuggingFace Spaces:** `7860` (or `$PORT` if provided by runtime)
+
+`api.py` resolves port automatically:
+
+- Uses `7860` when `SPACE_ID` is present
+- Otherwise defaults to `8000`
+- Honors `PORT` environment variable if set
+
+---
+
+## Local run
 
 ```bash
-cd C:\Users\Desto\orchids-projects\orchids-misinformation-detection-app
-.venv\Scripts\activate
 python api.py
 ```
 
-Terminal 2 - Start ngrok tunnel:
+Open:
+
+- API health: http://localhost:8000/health
+- Frontend: http://localhost:8000/app
+
+---
+
+## HuggingFace Spaces run (Docker)
+
+The `Dockerfile` exposes port `7860` and starts:
 
 ```bash
-ngrok http 8000
+uvicorn api:app --host 0.0.0.0 --port 7860
 ```
 
-ngrok will show you a URL like:
+Use the Space URL:
 
-`https://abc123.ngrok-free.app -> http://localhost:8000`
+- App: https://huggingface.co/spaces/werty3684/misinformation-detector
 
-Share that URL with anyone. They can access:
+---
 
-- `https://abc123.ngrok-free.app/app` (web interface)
-- `https://abc123.ngrok-free.app/predict` (API endpoint)
-- `https://abc123.ngrok-free.app/health` (health check)
+## Notes
 
-## Option 2: HuggingFace Spaces (Permanent free hosting)
+- No tunneling tools are required.
+- Ollama/LLM judge remains optional in production.
 
-Requires:
+---
 
-- huggingface.co account (free)
-- model files uploaded (700MB+ total)
+## Automated Deployment Script
 
-### Deploy steps
+Use the root script to deploy to both GitHub and HuggingFace in one run:
 
-1. Create account at https://huggingface.co
-2. Go to https://huggingface.co/new-space
-3. Choose Gradio or Docker as SDK
-4. Push your code and model files
-5. HuggingFace runs it 24/7 for free
+```powershell
+.\deploy.ps1 "Your commit message here"
+```
 
-### Limitations
+The script performs:
 
-- BERT runs on CPU only (free) -> 5-10 seconds per prediction
-- Must upload all model files
-- Sleeps after inactivity (wakes on request)
-
-For GPU (faster BERT): paid plan required.
-
-## Option 3: Google Colab (Good for demos)
-
-1. Upload project to Google Drive
-2. Open Colab: https://colab.research.google.com
-3. Mount Drive and run API + ngrok
-4. Share the ngrok URL
-
-Resets after session ends (8-12 hours).
+1. Commit + push main project to `origin/main`
+2. Sync required files into `C:\Users\Desto\hf-deploy`:
+   - `src/`
+   - `models/`
+   - `api.py`
+   - `config.yaml`
+   - `requirements.txt`
+   - `Dockerfile`
+   - `README.md`
+3. Commit + push `hf-deploy` to `huggingface/main`

@@ -104,4 +104,8 @@ def get_domains():
 
 
 if __name__ == "__main__":
-    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=False)
+    # Local default: 8000
+    # HuggingFace Spaces (Docker): 7860 unless PORT is explicitly set.
+    default_port = 7860 if os.getenv("SPACE_ID") else 8000
+    port = int(os.getenv("PORT", str(default_port)))
+    uvicorn.run("api:app", host="0.0.0.0", port=port, reload=False)

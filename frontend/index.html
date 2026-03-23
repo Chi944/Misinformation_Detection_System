@@ -57,7 +57,10 @@
     </div>
   </div>
   <script>
-    const API='http://localhost:8000';
+    // Same-origin API works for both local and HuggingFace Spaces:
+    // - local:       http://localhost:8000
+    // - production:  https://huggingface.co/spaces/... (container port 7860)
+    const API = window.location.origin;
     async function health(){
       try{
         const r=await fetch(API+'/health'); const d=await r.json();

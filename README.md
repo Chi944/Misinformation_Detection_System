@@ -68,6 +68,20 @@ python scripts/smoke_test.py --synthetic
 python -c "from src.detector import MisinformationDetector; d = MisinformationDetector(config='config.yaml'); r = d.predict('SHOCKING cover-up exposed by insiders!'); print(r['crisp_label'], r['ensemble_probability'])"
 ```
 
+## Deployment
+
+- Production (HuggingFace Spaces, Docker):
+  https://huggingface.co/spaces/werty3684/misinformation-detector
+- Ports:
+  - Local: `8000`
+  - Production container: `7860`
+- Deployment guide: [DEPLOY.md](DEPLOY.md)
+- Automated deploy script: `deploy.ps1`
+
+```powershell
+.\deploy.ps1 "Your commit message here"
+```
+
 ---
 
 ## Project Structure

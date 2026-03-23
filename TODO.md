@@ -114,7 +114,7 @@
 - [ ] 17.1 Add a REST API endpoint using FastAPI
 - [ ] 17.2 Add a simple web UI for live predictions
 - [ ] 17.3 Add multilingual support (non-English misinformation)
-- [ ] 17.4 Add source credibility database (known reliable/unreliable domains)
-- [ ] 17.5 Add explainability output (which words drove the prediction)
-- [ ] 17.6 Connect Ollama to a larger model (llama3:70b or mistral)
+- [x] 17.4 Add source credibility database (known reliable/unreliable domains)
+- [x] 17.5 Add explainability output (which words drove the prediction)
+- [x] 17.6 Connect Ollama to a larger model (llama3:70b or mistral)
 - [ ] 17.7 Deploy to a cloud server or HuggingFace Spaces

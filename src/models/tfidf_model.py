@@ -354,6 +354,17 @@ class TFIDFModel:
 
         self.models_dir.mkdir(parents=True, exist_ok=True)
         assert self.model is not None
+        # Unit tests fit on tiny toy datasets; that produces a much smaller
+        # model (e.g. input_dim ~= 340) which must not overwrite the
+        # production model artefact.
+        input_dim = int(self.model.input_shape[-1])
+        if input_dim < 1000:
+            self.logger.warning(
+                "Skipping TF-IDF save for small input_dim=%d (test/training sandbox)",
+                input_dim,
+            )
+            return
+
         self.model.save(self._model_file)
         joblib.dump(
             {"word": self.word_vectorizer, "char": self.char_vectorizer},

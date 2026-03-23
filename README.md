@@ -23,14 +23,20 @@ Weights optimised via grid search on validation set.
 
 | Model | Accuracy | F1 | Weight |
 |---|---|---|---|
-| BERT (LIAR fine-tuned) | 0.494 | 0.329 | 10% |
-| TF-IDF DNN | 0.654 | 0.707 | 60% |
-| Naive Bayes | 0.634 | 0.623 | 30% |
-| **Ensemble** | **0.662** | **0.665** | - |
+| BERT (mixed ISOT+LIAR+synthetic) | 0.620 | 0.632 | 10% |
+| TF-IDF DNN | 0.640 | 0.574 | 80% |
+| Naive Bayes | 0.634 | 0.623 | 10% |
+| **Ensemble** | **0.682** | **0.651** | - |
 
-Ensemble weights (bert=0.1, tfidf=0.6, nb=0.3) found via grid search on val set.
-Trained on 80,000 samples from ISOT, LIAR and WELFake.
-0 prediction errors on 500-sample test evaluation.
+Ensemble weights (bert=0.1, tfidf=0.8, nb=0.1) via grid search on val set.
+Training data: 80,000 samples from ISOT, LIAR and WELFake.
+BERT fine-tuned on mixed ISOT+LIAR+synthetic data on Google Colab T4 GPU.
+Evaluation: 0 prediction errors on 500-sample test set.
+
+To retrain locally (NB + TF-IDF, ~20 min):
+  python scripts/train_all.py --data data/train.csv --skip-bert --skip-gates
+
+To retrain BERT: use scripts in the Colab notebook format (requires GPU).
 
 ## Requirements
 

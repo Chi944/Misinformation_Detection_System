@@ -179,16 +179,17 @@ class MasterTrainer:
                 from torch.nn import functional as F
                 from transformers import BertTokenizer
 
-                from src.models.bert_classifier import BERTMisinformationClassifier
+                from src.models.bert_classifier import BERTClassifier
 
-                cfg = self.config.get("models", {}).get("bert", {})
+                cfg = dict(self.config.get("models", {}).get("bert", {}))
+                cfg["train_fresh"] = True
                 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-                checkpoint = cfg.get("checkpoint", "bert-base-uncased")
-                model = BERTMisinformationClassifier(
-                    checkpoint=checkpoint,
-                    dropout=cfg.get("dropout", 0.3),
-                ).to(device)
-                tokenizer = BertTokenizer.from_pretrained(checkpoint)
+                model = BERTClassifier(config=cfg).to(device)
+                tokenizer = model.tokenizer
+                if tokenizer is None:
+                    tokenizer = BertTokenizer.from_pretrained(
+                        cfg.get("checkpoint", "bert-base-uncased")
+                    )
                 optimizer = torch.optim.AdamW(
                     model.parameters(), lr=cfg.get("learning_rate", 2e-5)
                 )
@@ -235,7 +236,7 @@ class MasterTrainer:
                         mask = enc["attention_mask"].to(device)
                         lbls = torch.tensor(list(bl), dtype=torch.long).to(device)
                         optimizer.zero_grad()
-                        logits = model.model(input_ids=ids, attention_mask=mask).logits
+                        logits = model(ids, mask)
                         loss = F.cross_entropy(logits, lbls, weight=class_weights)
                         loss.backward()
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -247,7 +248,7 @@ class MasterTrainer:
 
                 # Save BERT for detector
                 os.makedirs("models", exist_ok=True)
-                torch.save(model.model.state_dict(), "models/bert_classifier.pt")
+                torch.save(model.state_dict(), "models/bert_classifier.pt")
                 self.logger.info("BERT checkpoint saved to models/bert_classifier.pt")
 
                 # Evaluate BERT on val set
@@ -266,7 +267,7 @@ class MasterTrainer:
                         )
                         ids = enc["input_ids"].to(device)
                         mask = enc["attention_mask"].to(device)
-                        out = model.model(input_ids=ids, attention_mask=mask).logits
+                        out = model(ids, mask)
                         preds_batch = torch.argmax(out, dim=1).cpu().tolist()
                         all_preds.extend(preds_batch)
                 val_subset = val_labels[: len(all_preds)]

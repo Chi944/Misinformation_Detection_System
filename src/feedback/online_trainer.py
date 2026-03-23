@@ -19,7 +19,7 @@ class OnlineTrainer:
     Part of the backward propagation feedback loop pipeline.
 
     Args:
-        bert_model: BERTMisinformationClassifier instance
+        bert_model: BERTClassifier (or compatible nn.Module with forward(ids, mask))
         bert_tokenizer: HuggingFace tokenizer for BERT
         tfidf_model: TFIDFModel instance
         tfidf_vectorizer: fitted TfidfVectorizer
@@ -110,8 +110,10 @@ class OnlineTrainer:
                     )
                     enc = {k: v.to(self.device) for k, v in enc.items()}
                     label_t = torch.tensor([int(label)], device=self.device)
-                    probs = self.bert_model(**enc)
-                    ce_loss = criterion(probs, label_t)
+                    logits = self.bert_model(
+                        enc["input_ids"], enc["attention_mask"]
+                    )
+                    ce_loss = criterion(logits, label_t)
                     ewc_loss = self._ewc_penalty(self.bert_model)
                     loss = ce_loss + 0.1 * ewc_loss
                     optimizer.zero_grad()

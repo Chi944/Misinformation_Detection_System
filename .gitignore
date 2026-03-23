@@ -7,6 +7,7 @@ __pycache__/
 .env
 feedback.db
 *.flag
+eval_500_out.txt
 reports/*.png
 reports/*.json
 data/*.csv

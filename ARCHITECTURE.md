@@ -5,7 +5,7 @@ Input Text
 |
 +------------------+------------------+
 |                  |                  |
-BERTMisinformation   TFIDFModel     TFNaiveBayes
+BERTClassifier       TFIDFModel     TFNaiveBayes
 Classifier         (Keras DNN)      Wrapper
 (bert-base-uncased)  (word+char      (Complement
 PyTorch             TF-IDF)          NB)

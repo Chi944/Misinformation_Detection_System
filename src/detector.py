@@ -90,52 +90,14 @@ class MisinformationDetector:
         else:
             try:
                 import torch
-                from transformers import BertTokenizer
 
-                from src.models.bert_classifier import (
-                    BERTMisinformationClassifier,
-                    BERTPoolerClassifier,
-                    BERTPoolerDetectorWrapper,
-                )
+                from src.models.bert_classifier import BERTClassifier
 
-                bert_cfg = cfg.get("bert", {})
-                checkpoint = bert_cfg.get("checkpoint", "bert-base-uncased")
-                dropout = bert_cfg.get("dropout", 0.3)
-                ckpt_path = os.path.join("models", "bert_classifier.pt")
-                if os.path.isfile(ckpt_path):
-                    state = torch.load(ckpt_path, map_location=self.device)
-                    # Prefer LIAR / Kaggle pooler+linear layout (matches external training scripts).
-                    try:
-                        pooler = BERTPoolerClassifier(
-                            checkpoint=checkpoint,
-                            dropout=dropout,
-                        )
-                        pooler.load_state_dict(state, strict=True)
-                        self.bert_model = BERTPoolerDetectorWrapper(pooler)
-                        self.logger.info(
-                            "BERT loaded (pooler head, LIAR-style) from %s", ckpt_path
-                        )
-                    except Exception as e_pool:
-                        self.logger.info(
-                            "BERT pooler load failed (%s); trying HuggingFace seq-classification",
-                            e_pool,
-                        )
-                        self.bert_model = BERTMisinformationClassifier(
-                            checkpoint=checkpoint,
-                            dropout=dropout,
-                        )
-                        self.bert_model.model.load_state_dict(state, strict=True)
-                        self.logger.info(
-                            "BERT loaded (HF seq-classification) from %s", ckpt_path
-                        )
-                else:
-                    self.bert_model = BERTMisinformationClassifier(
-                        checkpoint=checkpoint,
-                        dropout=dropout,
-                    )
+                bert_cfg = dict(cfg.get("bert", {}))
+                self.bert_model = BERTClassifier(config=bert_cfg)
                 self.bert_model.to(self.device)
                 self.bert_model.eval()
-                self.bert_tokenizer = BertTokenizer.from_pretrained(checkpoint)
+                self.bert_tokenizer = getattr(self.bert_model, "tokenizer", None)
                 self.logger.info("BERT initialised")
             except Exception as e:
                 self.logger.warning("BERT init failed: %s", e)

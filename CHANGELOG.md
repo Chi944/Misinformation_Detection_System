@@ -8,7 +8,7 @@
 - All src/__init__.py files
 
 ### Added — Phase 1: Models
-- BERTMisinformationClassifier (bert-base-uncased, PyTorch, dropout=0.3)
+- BERTClassifier (BertModel + pooler + linear, PyTorch, dropout=0.3)
 - TFIDFModel (word 50k + char 30k TF-IDF, Keras DNN)
 - TFNaiveBayesWrapper (ComplementNB, online learning via partial_fit)
 - EnsembleDetector (weighted average, BERT 50% + TF-IDF 30% + NB 20%)

@@ -27,10 +27,10 @@ Evaluated on 500 real test samples (ISOT + LIAR + WELFake datasets):
 | Naive Bayes | 0.634 | 0.623 | 10% |
 | Ensemble | 0.648 | 0.655 | 0.2+0.7+0.1 |
 
-Weights from grid search on validation (full `val.csv`: run without env `GRID_VAL_MAX`; optional cap for speed). BERT checkpoint: LIAR-trained pooler head in `models/bert_classifier.pt`. TF-IDF Keras aligned to 80k-dim vectorizer.
+Weights from grid search on validation: `python scripts/grid_search_val_weights.py` (optional `GRID_VAL_MAX` env for a subsample). BERT: `BERTClassifier` in `src/models/bert_classifier.py` (BertModel + pooler + linear), weights in `models/bert_classifier.pt`. Re-evaluate test subset: `python scripts/eval_500_test.py`.
 
 Training data: 80,000 samples from ISOT, LIAR, WELFake.
-BERT: LIAR dataset fine-tune (~65% val reported in training); pipeline uses pooler+linear layout.
+BERT: LIAR-style fine-tune; same architecture as Colab training.
 
 To retrain:
 ```bash

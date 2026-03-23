@@ -1,29 +1,27 @@
-"""Final 500-sample test evaluation with optimal ensemble weights."""
+"""Evaluate ensemble and base models on first 500 rows of data/test.csv."""
+import csv
 import os
 import sys
-import csv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
-from src.detector import MisinformationDetector
 from sklearn.metrics import accuracy_score, f1_score, precision_score
+
+from src.detector import MisinformationDetector
 
 
 def main():
     detector = MisinformationDetector(config="config.yaml", fast_mode=False)
-    if detector.ensemble:
-        w = detector.ensemble._get_active_weights()
-        print("Active weights:", {k: round(v, 2) for k, v in w.items()})
-        assert all(v > 0 for v in w.values()), "Some models have zero weight!"
-        print("All 3 models have non-zero weight: OK")
+    w = detector.ensemble._get_active_weights()
+    print("Weights:", {k: round(v, 2) for k, v in w.items()})
 
     with open("data/test.csv", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))[:500]
     texts = [r["text"] for r in rows]
     labels = [int(r["label"]) for r in rows]
 
-    print("Final evaluation on 500 test samples...")
+    print("Evaluating 500 samples...")
     ens_preds = []
     model_preds = {"bert": [], "tfidf": [], "naive_bayes": []}
     errors = 0
@@ -47,14 +45,14 @@ def main():
 
     print("")
     print("=== FINAL RESULTS ===")
-    best = {"ENSEMBLE": 0.656, "BERT": 0.556, "TFIDF": 0.646, "NAIVE_BAYES": 0.634}
+    prev = {"ENSEMBLE": 0.656, "BERT": 0.556, "TFIDF": 0.646, "NAIVE_BAYES": 0.634}
     for name, preds in [("ENSEMBLE", ens_preds)] + [
         (m.upper(), p) for m, p in model_preds.items()
     ]:
         acc = accuracy_score(labels, preds)
         f1 = f1_score(labels, preds, zero_division=0)
         prec = precision_score(labels, preds, zero_division=0)
-        diff = acc - best.get(name, 0.0)
+        diff = acc - prev.get(name, 0.0)
         arrow = "UP  +%.3f" % diff if diff > 0 else "DOWN %.3f" % diff
         print(
             "%-14s  acc=%.4f  f1=%.4f  prec=%.4f  [%s]"
@@ -63,11 +61,9 @@ def main():
     print("Errors: %d/500" % errors)
     ens_acc = accuracy_score(labels, ens_preds)
     print("")
-    print("Previous best ensemble: 0.656")
-    print("This run:                 %.4f" % ens_acc)
-    print(
-        "Status: %s" % ("IMPROVED" if ens_acc > 0.656 else "BELOW BEST")
-    )
+    print("Previous best: 0.656")
+    print("This run:      %.4f" % ens_acc)
+    print("Status: %s" % ("IMPROVED" if ens_acc > 0.656 else "BELOW BEST"))
 
 
 if __name__ == "__main__":

@@ -21,9 +21,9 @@ from src.models.tfidf_model import TFIDFModel
 class EnsembleWeights:
     """Weights for the three base models."""
 
-    bert: float = 0.2
-    tfidf: float = 0.7
-    naive_bayes: float = 0.1
+    bert: float = 0.3
+    tfidf: float = 0.5
+    naive_bayes: float = 0.2
 
     def as_array(self) -> np.ndarray:
         w = np.asarray([self.bert, self.tfidf, self.naive_bayes], dtype="float32")
@@ -35,7 +35,7 @@ class EnsembleDetector:
     """Weighted soft-voting ensemble over three base models.
 
     Args:
-        bert_model: Trained BERT module (HuggingFace seq-classification or pooler wrapper).
+        bert_model: Trained :class:`BERTClassifier` instance.
         tfidf_model: Trained :class:`TfidfDNNClassifier` instance.
         nb_model: Trained :class:`TFNaiveBayesWrapper` instance.
         weights: Optional :class:`EnsembleWeights` specifying contribution of
@@ -69,9 +69,9 @@ class EnsembleDetector:
         """
         m = self.config.get("models", {}) if isinstance(self.config, dict) else {}
         base = {
-            "bert": float(m.get("bert", {}).get("weight", 0.2)),
-            "tfidf": float(m.get("tfidf", {}).get("weight", 0.7)),
-            "naive_bayes": float(m.get("naive_bayes", {}).get("weight", 0.1)),
+            "bert": float(m.get("bert", {}).get("weight", 0.3)),
+            "tfidf": float(m.get("tfidf", {}).get("weight", 0.5)),
+            "naive_bayes": float(m.get("naive_bayes", {}).get("weight", 0.2)),
         }
         active: Dict[str, float] = {}
         if self.bert_model is not None and self.bert_tokenizer is not None:
@@ -120,8 +120,7 @@ class EnsembleDetector:
                 ids = enc["input_ids"].to(self.device)
                 mask = enc["attention_mask"].to(self.device)
                 with torch.no_grad():
-                    raw = self.bert_model.model(input_ids=ids, attention_mask=mask)
-                    logits = raw.logits if hasattr(raw, "logits") else raw
+                    logits = self.bert_model(ids, mask)
                     probs = torch.softmax(logits, dim=-1).cpu().numpy()
                 bert_p = np.asarray(probs, dtype="float32")
             except Exception:

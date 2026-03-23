@@ -129,7 +129,6 @@ Invoke-Step -Name "Sync project files to HF deploy folder" -Action {
     Copy-FileChecked -SourceFile (Join-Path $MainProject "config.yaml") -DestinationDir $HfDeploy
     Copy-FileChecked -SourceFile (Join-Path $MainProject "requirements.txt") -DestinationDir $HfDeploy
     Copy-FileChecked -SourceFile (Join-Path $MainProject "Dockerfile") -DestinationDir $HfDeploy
-    Copy-FileChecked -SourceFile (Join-Path $MainProject "README.md") -DestinationDir $HfDeploy
 }
 
 # --- 3) Push HF deploy workspace to HuggingFace remote ---

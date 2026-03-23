@@ -11,7 +11,7 @@ Anyone with the URL can access it while your machine is running.
 2. Download ngrok for Windows from https://ngrok.com/download
 3. Extract ngrok.exe to your project folder
 4. Get your auth token from https://dashboard.ngrok.com/get-started/your-authtoken
-5. Run: `ngrok config add-authtoken YOUR_TOKEN_HERE`
+5. Run: `ngrok config add-authtoken 3BM0xQ4hMX63j26xDjwAmg7FD0O_397qFmxUDFFNQAVQTY6fr`
 
 ### Run your app and share it
 

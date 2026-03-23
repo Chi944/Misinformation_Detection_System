@@ -18,7 +18,42 @@ from sklearn.metrics import f1_score
 from torch import nn
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
-from transformers import BertForSequenceClassification, get_linear_schedule_with_warmup
+from transformers import BertForSequenceClassification, BertModel, get_linear_schedule_with_warmup
+
+
+class BERTPoolerClassifier(nn.Module):
+    """BERT encoder + pooler + linear head (common external / LIAR training layout).
+
+    State dict keys match ``bert.*``, ``classifier.*`` as saved from many Kaggle scripts.
+    """
+
+    def __init__(self, checkpoint: str = "bert-base-uncased", dropout: float = 0.3) -> None:
+        super().__init__()
+        self.bert = BertModel.from_pretrained(checkpoint)
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(768, 2)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        out = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+        )
+        x = self.dropout(out.pooler_output)
+        return self.classifier(x)
+
+
+class BERTPoolerDetectorWrapper(nn.Module):
+    """Adapts :class:`BERTPoolerClassifier` for code that expects ``wrapper.model(...)``."""
+
+    def __init__(self, pooler: BERTPoolerClassifier) -> None:
+        super().__init__()
+        self.add_module("model", pooler)
 
 
 class BERTMisinformationClassifier(nn.Module):

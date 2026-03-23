@@ -22,7 +22,8 @@ def main():
         rows = list(csv.DictReader(f))
     random.seed(42)
     random.shuffle(rows)
-    rows = rows[:20000]
+    cap = int(os.environ.get("TFIDF_RETRAIN_SAMPLES", "20000"))
+    rows = rows[:cap]
     texts = [r["text"] for r in rows]
     labels = [int(r["label"]) for r in rows]
 
@@ -46,8 +47,9 @@ def main():
         tf.keras.layers.Dense(2, activation="softmax"),
     ])
     model.compile(optimizer="adam", loss="sparse_categorical_crossentropy")
-    print("Training 2 epochs...")
-    model.fit(X, y, epochs=2, batch_size=128, validation_split=0.1, verbose=1)
+    epochs = int(os.environ.get("TFIDF_RETRAIN_EPOCHS", "2"))
+    print("Training %d epochs..." % epochs)
+    model.fit(X, y, epochs=epochs, batch_size=128, validation_split=0.1, verbose=1)
 
     model.save("models/tfidf_model.keras")
     size = os.path.getsize("models/tfidf_model.keras") / 1e6

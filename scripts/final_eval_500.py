@@ -46,8 +46,8 @@ def main():
             print("  %d/500 (errors:%d)" % (i + 1, errors))
 
     print("")
-    print("=== FINAL RESULTS WITH ALL 3 MODELS ===")
-    best = {"ENSEMBLE": 0.622, "BERT": 0.556, "TFIDF": 0.646, "NAIVE_BAYES": 0.634}
+    print("=== FINAL RESULTS ===")
+    best = {"ENSEMBLE": 0.656, "BERT": 0.556, "TFIDF": 0.646, "NAIVE_BAYES": 0.634}
     for name, preds in [("ENSEMBLE", ens_preds)] + [
         (m.upper(), p) for m, p in model_preds.items()
     ]:
@@ -63,11 +63,10 @@ def main():
     print("Errors: %d/500" % errors)
     ens_acc = accuracy_score(labels, ens_preds)
     print("")
-    print("All-time best: 0.622")
-    print("This run:      %.4f" % ens_acc)
+    print("Previous best ensemble: 0.656")
+    print("This run:                 %.4f" % ens_acc)
     print(
-        "Using all 3:   %s"
-        % ("IMPROVED" if ens_acc > 0.622 else "BELOW BEST")
+        "Status: %s" % ("IMPROVED" if ens_acc > 0.656 else "BELOW BEST")
     )
 
 

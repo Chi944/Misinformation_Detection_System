@@ -1,15 +1,102 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Misinformation Detection</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap" rel="stylesheet" />
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Misinformation Detector</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh;display:flex;justify-content:center;padding:40px 20px}
+    .container{width:100%;max-width:760px}
+    .card{background:#1e2130;border:1px solid #2d3148;border-radius:12px;padding:24px;margin-bottom:16px}
+    h1{text-align:center;margin-bottom:8px}
+    .sub{text-align:center;color:#94a3b8;margin-bottom:20px}
+    label{display:block;font-size:.85rem;color:#94a3b8;margin-bottom:8px}
+    textarea,input{width:100%;background:#0f1117;border:1px solid #2d3148;border-radius:8px;color:#e2e8f0;padding:12px}
+    textarea{min-height:120px;resize:vertical}
+    button{width:100%;padding:12px;border:none;border-radius:8px;background:#6366f1;color:#fff;font-weight:600;cursor:pointer;margin-top:14px}
+    .status{display:flex;justify-content:center;margin-bottom:14px;color:#94a3b8}
+    .dot{width:8px;height:8px;border-radius:50%;background:#64748b;margin-right:8px;margin-top:6px}
+    .ok{background:#22c55e}.err{background:#ef4444}
+    .hidden{display:none}
+    .result h2{margin-bottom:8px}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+    .mini{background:#0f1117;border:1px solid #2d3148;border-radius:8px;padding:10px;text-align:center}
+    .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+    .chip{padding:4px 10px;border-radius:999px;font-size:.8rem}
+    .mis{background:#3b0a0a;color:#fca5a5}.cred{background:#052e16;color:#86efac}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Misinformation Detector</h1>
+    <div class="sub">Three-model ensemble - BERT · TF-IDF · Naive Bayes</div>
+    <div class="status"><span id="dot" class="dot"></span><span id="status">Connecting to API...</span></div>
+    <div class="card">
+      <label>Text to analyse</label>
+      <textarea id="text" placeholder="Paste or type text..."></textarea>
+      <label style="margin-top:12px">Source URL (optional)</label>
+      <input id="url" type="text" placeholder="https://example.com/article">
+      <label style="margin-top:10px"><input id="explain" type="checkbox" checked> Show word analysis</label>
+      <button onclick="analyse()">Analyse Text</button>
+    </div>
+    <div id="error" class="card hidden"></div>
+    <div id="result" class="card result hidden">
+      <h2 id="verdict"></h2>
+      <div id="prob"></div>
+      <div class="grid" id="models" style="margin-top:12px"></div>
+      <div id="sourceWrap" class="hidden" style="margin-top:12px">
+        <h3>Source Credibility</h3>
+        <div id="source"></div>
+      </div>
+      <div id="explainWrap" class="hidden" style="margin-top:12px">
+        <h3>Word Analysis</h3>
+        <div><b>Misinfo indicators</b><div id="mis" class="chips"></div></div>
+        <div style="margin-top:8px"><b>Credible indicators</b><div id="cred" class="chips"></div></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const API='http://localhost:8000';
+    async function health(){
+      try{
+        const r=await fetch(API+'/health'); const d=await r.json();
+        if(d.status==='ok'&&d.detector){dot.className='dot ok';status.textContent='API connected and ready';}
+        else throw new Error();
+      }catch{dot.className='dot err';status.textContent='API not connected - run: python api.py';}
+    }
+    async function analyse(){
+      error.classList.add('hidden'); result.classList.add('hidden');
+      const text=document.getElementById('text').value.trim();
+      const url=document.getElementById('url').value.trim();
+      const explain=document.getElementById('explain').checked;
+      if(text.length<5){error.textContent='Text must be at least 5 characters'; error.classList.remove('hidden'); return;}
+      try{
+        const body={text,explain}; if(url) body.url=url;
+        const resp=await fetch(API+'/predict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        const data=await resp.json(); if(!resp.ok) throw new Error(data.detail||'API error');
+        verdict.textContent='Verdict: '+(data.verdict||'UNKNOWN');
+        prob.textContent='Ensemble probability: '+((data.ensemble_probability||0)*100).toFixed(1)+'% misinfo';
+        const m=data.model_breakdown||{};
+        models.innerHTML=['bert','tfidf','naive_bayes'].map(k=>`<div class="mini"><div>${k}</div><div>${(((m[k]||{}).confidence||0)*100).toFixed(1)}%</div></div>`).join('');
+        if(data.source_credibility){
+          const sc=data.source_credibility;
+          source.textContent=`${sc.domain||'?'} | score=${(sc.score||0).toFixed(2)} | ${sc.label||'unknown'}`;
+          sourceWrap.classList.remove('hidden');
+        }else sourceWrap.classList.add('hidden');
+        const sum=((data.explanation||{}).summary)||{};
+        const misinfo=sum.misinfo_indicators||[]; const credible=sum.credible_indicators||[];
+        if(misinfo.length||credible.length){
+          mis.innerHTML=misinfo.map(w=>`<span class="chip mis">${w}</span>`).join('');
+          cred.innerHTML=credible.map(w=>`<span class="chip cred">${w}</span>`).join('');
+          explainWrap.classList.remove('hidden');
+        }else explainWrap.classList.add('hidden');
+        result.classList.remove('hidden');
+      }catch(e){
+        error.textContent='Error: '+e.message; error.classList.remove('hidden');
+      }
+    }
+    health(); setInterval(health,10000);
+  </script>
+</body>
 </html>

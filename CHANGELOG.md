@@ -1,96 +1,50 @@
 # Changelog
 
-## [1.0.0] - 2025-01-01
+All notable changes are documented here.
 
-### Added — Phase 0: Project Setup
-- Project structure with all src/ subdirectories
-- requirements.txt with Python 3.12 compatible versions
-- All src/__init__.py files
+---
 
-### Added — Phase 1: Models
-- BERTClassifier (BertModel + pooler + linear, PyTorch, dropout=0.3)
-- TFIDFModel (word 50k + char 30k TF-IDF, Keras DNN)
-- TFNaiveBayesWrapper (ComplementNB, online learning via partial_fit)
-- EnsembleDetector (weighted average, BERT 50% + TF-IDF 30% + NB 20%)
-- MasterTrainer with AccuracyGateError and per-model accuracy gates
-  (BERT acc>=0.78, TF-IDF acc>=0.76, NB acc>=0.75, Ensemble acc>=0.82)
+## [Current] - Phase 17 Complete
 
-### Added — Phase 2: Fuzzy Logic
-- FuzzyMisinformationEngine: manual Mamdani inference, 18 rules
-- 6 antecedents, 1 consequent, centroid defuzzification
-- skfuzzy_compat.py: patches removed imp module for Python 3.12
-- No ControlSystem usage (crashes on Python 3.12)
+### Added
+- Domain credibility scoring (80+ domains, data/domain_reputation.json)
+- Explainability output (top words per model, explain=True parameter)
+- LLM judge upgraded to mistral with llama3/llama2 fallback
+- src/utils/domain_credibility.py
+- src/utils/explainability.py
 
-### Added — Phase 3: Feedback Loop
-- FeedbackStore: SQLite persistence, TF-IDF cosine similarity lookup
-- OnlineTrainer: BERT (AdamW + EWC), TF-IDF (Keras fit), NB (partial_fit)
-- BackpropFeedbackLoop: 9-step run_cycle() with git commit integration
+### Performance
+- Ensemble accuracy: 0.682 (all-time best)
+- BERT accuracy: 0.620 (retrained on mixed ISOT+LIAR+synthetic data)
+- TF-IDF accuracy: 0.656
+- NB accuracy: 0.634
+- Ensemble weights: bert=0.1, tfidf=0.8, nb=0.1
 
-### Added — Phase 4: LLM Judge
-- LLMJudge: local Ollama (llama3), no API key required
-- Endpoint: http://localhost:11434/api/generate
-- FALLBACK_VERDICT for when Ollama is not running
-- evaluate_single(), evaluate_batch(), generate_model_report()
+---
 
-### Added — Phase 5: Evaluation
-- MetricsCalculator: accuracy, precision, recall, F1, ROC-AUC, ECE
-- EvaluationDashboard: 6-panel PNG (confusion matrices, ROC curves,
-  fuzzy membership, judge agreement, calibration, heatmap)
-- EvaluationPipeline: orchestrates metrics + judge + dashboard
+## Phase 16 - Real Data Integration
 
-### Added — Phase 6: Master Detector
-- MisinformationDetector: master class coordinating all components
-- predict(), evaluate(), evaluate_quick() methods
-- fast_mode for CI/smoke tests (skips heavy model downloads)
+### Added
+- 80,000 real training samples (ISOT + LIAR + WELFake + COVID + FakeNewsNet)
+- Grid search for optimal ensemble weights on validation set
+- BERT fine-tuned on Kaggle GPU (Tesla T4)
 
-### Added — Phase 7: Training Pipeline
-- MisinformationDataset: CSV/JSON loader, stratified split
-- create_synthetic(): 200-sample keyword-based synthetic dataset
-- TemperatureScaler and EnsembleCalibrator: post-hoc calibration
-- scripts/train_all.py: CLI with --synthetic and --skip-gates flags
+---
 
-### Added — Phase 8: CI/CD
-- .github/workflows/ci.yml: GitHub Actions, Python 3.12, Ollama install
-- .devcontainer/devcontainer.json: GitHub Codespaces configuration
-- .devcontainer/postCreateCommand.sh: auto-setup with Ollama pull
+## Phase 15 - CI/CD
 
-### Added — Phase 9: Git Automation
-- GitManager: automated commit of feedback cycle results
+### Added
+- GitHub Actions workflow (.github/workflows/ci.yml)
+- Dev container configuration (.devcontainer/)
 
-### Added — Phase 10: Scripts
-- scripts/smoke_test.py: 8-check pipeline verification
-- scripts/evaluate.py: full evaluation with report output
-- scripts/run_feedback_cycle.py: single feedback cycle runner
-- scripts/download_sample_data.py: generates 800/100/100 CSV splits
+---
 
-### Added — Phase 11: Utilities
-- get_logger(): cached logger with stdout + optional file handler
-- get_device(), get_tf_device(), set_memory_growth(), log_device_info()
-- clean_text(), safe_divide(), clamp(), hash_text(), label_to_str()
+## Phase 0-14 - Core System
 
-### Added — Phase 12: Tests
-- 8 pytest test files: 53 passed, 6 skipped, 0 failed
-- test_accuracy_gate, test_fuzzy_rules, test_feedback_loop,
-  test_ensemble, test_llm_judge, test_bert, test_tfidf, test_naive_bayes
-
-### Added — Phase 13: Configuration
-- config.yaml: all model, training, gate, fuzzy, feedback, eval settings
-- .env.example: environment variable template
-- .gitignore: excludes .venv, node_modules, checkpoints, feedback.db
-
-### Added — Phase 14: Documentation
-- README.md, ARCHITECTURE.md, FEEDBACK_LOOP.md, CHANGELOG.md
-- data/README.md with CSV format and data source references
-
-### Added — Phase 15: Final Execution
-- All 15 phases verified end-to-end
-- Git history cleaned (removed .venv and node_modules via filter-repo)
-- Final commit: 56bf361
-- Repository: https://github.com/Chi944/Misinformation_Detection_System
-
-### Technical Notes
-- Python 3.12.7 on Windows
-- scikit-fuzzy requires skfuzzy_compat.py (patches removed imp module)
-- All print statements use %% formatting (Windows cp1252 safe)
-- Lazy imports throughout to prevent import-time hangs
-- Local Ollama — zero external API dependencies
+### Added
+- Three-model ensemble (BERT + TF-IDF DNN + Naive Bayes)
+- Mamdani fuzzy logic engine (18 rules, Python 3.12 compatible)
+- BackpropFeedbackLoop with EWC regularisation
+- Local Ollama LLM judge (no API key required)
+- Evaluation pipeline with dashboard
+- 54 pytest tests

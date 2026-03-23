@@ -1,116 +1,133 @@
-# Architecture
+# System Architecture
 
-## Pipeline
+## Overview
+
+The misinformation detection system uses a three-model ensemble with
+fuzzy logic calibration, an optional LLM judge, and an online feedback loop.
+
+```
 Input Text
-|
-+------------------+------------------+
-|                  |                  |
-BERTClassifier       TFIDFModel     TFNaiveBayes
-Classifier         (Keras DNN)      Wrapper
-(bert-base-uncased)  (word+char      (Complement
-PyTorch             TF-IDF)          NB)
-|                  |                  |
-+------------------+------------------+
-|
-EnsembleDetector
-BERT 50% + TFIDF 30% + NB 20%
-weights recalibrated each cycle
-|
-FuzzyMisinformationEngine
-18 rules, manual Mamdani
-Python 3.12 safe (no ControlSystem)
-|
-LLMJudge
-Ollama llama3 local
-no API key required
-|
-BackpropFeedbackLoop
-EWC + online learning
-hill-climbing thresholds
+    |
+    +---> BERT Classifier (10%)      --+
+    |     bert-base-uncased             |
+    |     PyTorch                       |
+    |                                   |
+    +---> TF-IDF DNN (80%)           --+--> Weighted Ensemble
+    |     word + char n-grams           |    --> Fuzzy Logic
+    |     TensorFlow/Keras              |    --> LLM Judge (optional)
+    |                                   |    --> Final Verdict
+    +---> Naive Bayes (10%)          --+
+          ComplementNB
+          scikit-learn
+```
 
-## Models
+---
 
-### BERT (src/models/bert_classifier.py)
-- Base: bert-base-uncased
-- Architecture: BertModel + Dropout(0.3) + Linear(768, 2)
-- Framework: PyTorch
-- Training: AdamW, lr=2e-5, warmup steps
-- Output: 2-class logits (credible / misinformation)
+## Components
+
+### BERT Classifier (src/models/bert_classifier.py)
+- Base model: bert-base-uncased (110M parameters)
+- Fine-tuned on: ISOT real news + LIAR fact-checks + synthetic patterns
+- Architecture: BertModel -> Dropout(0.3) -> Linear(768, 2)
+- Trained on: Google Colab T4 GPU
+- Val accuracy: 0.620
 
 ### TF-IDF DNN (src/models/tfidf_model.py)
-- Input: word TF-IDF (50k features) + char TF-IDF (30k) + extra features
-- Architecture: Dense(256, relu) -> Dropout -> Dense(128, relu) -> Dense(2)
-- Framework: TensorFlow/Keras
-- Online update: Keras model.fit() with small batches
+- Features: 50k word n-grams + 30k char n-grams = 80k total
+- Architecture: Dense(256, relu) -> Dropout(0.4) -> Dense(128, relu) -> Dense(2, softmax)
+- Vectorizer: saved as models/tfidf_vectorizer.joblib
+- Val accuracy: 0.656
 
 ### Naive Bayes (src/models/naive_bayes_model.py)
-- Model: ComplementNB (handles class imbalance)
-- Vectorizer: TF-IDF (sklearn)
-- Online learning: partial_fit() for feedback loop updates
-- Wrapper: TFNaiveBayesWrapper (TF-compatible interface)
+- Type: ComplementNB with online learning (partial_fit)
+- Supports incremental updates via feedback loop
+- Val accuracy: 0.634
 
 ### Ensemble (src/models/ensemble_detector.py)
-- Default weights: BERT=0.50, TF-IDF=0.30, NB=0.20
-- Combination: weighted average of softmax probabilities
-- Recalibration: weights updated each feedback cycle
+- Weights: BERT=0.1, TF-IDF=0.8, NB=0.1
+- Weights optimised via grid search on 10,000 val samples
+- Ensemble accuracy: 0.682
 
-## Fuzzy Logic Engine (src/fuzzy/)
+### Fuzzy Logic (src/fuzzy/)
+- Engine: Manual Mamdani inference (Python 3.12 compatible)
+- Rules: 18 rules combining model confidences
+- Inputs: bert_confidence, tfidf_confidence, nb_confidence
+- Output: fuzzy_score (0.0 to 1.0)
 
-Manual Mamdani inference — Python 3.12 compatible:
-`python
-# skfuzzy_compat.py patches the removed imp module
-import src.utils.skfuzzy_compat  # must come before import skfuzzy
-import skfuzzy as fuzz
-`
+### LLM Judge (src/evaluation/llm_judge.py)
+- Backend: Local Ollama (no external API)
+- Model: mistral (fallback: llama3, llama2)
+- Optional: system works without it
 
-- 6 antecedents: source_credibility, bert_confidence, tfidf_confidence,
-  nb_confidence, model_agreement, feedback_score
-- 1 consequent: misinfo_score
-- 18 rules covering LOW/MEDIUM/HIGH input combinations
-- MFs: trimf LOW=[0,0,0.45] MEDIUM=[0.35,0.5,0.65] HIGH=[0.55,1,1]
-- Output MFs (trapmf):
-  credible=[0,0,0.25,0.4]
-  suspicious=[0.3,0.45,0.55,0.7]
-  misinformation=[0.6,0.75,1,1]
-- Defuzzification: centroid method
-- Returns 0.5 on any exception (safe fallback)
+### Feedback Loop (src/feedback/)
+- Algorithm: Backpropagation with EWC regularisation
+- EWC lambda: 0.1
+- Prevents catastrophic forgetting on new data
+- Storage: feedback.db (SQLite)
 
-## LLM Judge (src/evaluation/llm_judge.py)
+### Domain Credibility (src/utils/domain_credibility.py)
+- Database: data/domain_reputation.json (80+ domains)
+- Adjusts ensemble probability by up to 10% based on source
+- Reuters/Nature: highly credible -> nudges toward credible
+- Infowars/NaturalNews: unreliable -> nudges toward misinfo
 
-Local Ollama integration — no API key:
+### Explainability (src/utils/explainability.py)
+- TF-IDF: top words by TF-IDF score
+- NB: top words by log probability contribution
+- Output added to prediction when explain=True
 
-- Endpoint: http://localhost:11434/api/generate
-- Model: llama3 (configurable in config.yaml)
-- Evaluates: independent verdict, per-model judgment, fuzzy calibration
-- Fallback: returns FALLBACK_VERDICT dict if Ollama is not running
-- Temperature: 0.1, max tokens: 400
+---
 
-## Feedback Loop (src/feedback/backprop_loop.py)
+## Data Flow
 
-BackpropFeedbackLoop.run_cycle() — 9 steps:
+```
+predict(text, url=None, explain=False)
+    |
+    +--> BERT.predict(text)        -> bert_prob
+    +--> TFIDFModel.predict(text)  -> tfidf_prob
+    +--> NaiveBayes.predict(text)  -> nb_prob
+    |
+    +--> Ensemble.combine(bert_prob, tfidf_prob, nb_prob, weights)
+    |        -> ensemble_prob
+    |
+    +--> FuzzyEngine.evaluate(bert_prob, tfidf_prob, nb_prob)
+    |        -> fuzzy_score
+    |
+    +--> [optional] LLMJudge.evaluate(text)
+    |        -> llm_verdict
+    |
+    +--> [if url] DomainCredibility.adjust_probability(ensemble_prob, url)
+    |        -> adjusted_prob
+    |
+    +--> [if explain] Explainability.explain(text, tfidf, nb)
+    |        -> top_words
+    |
+    +--> Result dict:
+            ensemble_probability  float 0-1
+            verdict               CREDIBLE / SUSPICIOUS / MISINFORMATION
+            model_breakdown       per-model confidences
+            fuzzy_score           float 0-1
+            source_credibility    domain score and label (if url given)
+            explanation           top words (if explain=True)
+            llm_judge             LLM verdict (if Ollama running)
+```
 
-1. Forward pass: predict() for each sample
-2. Ground truth: LLM judge or supplied true_labels
-3. Error signals: per-model error computation
-4. Backward pass: online update for high-error samples only
-5. Fuzzy threshold hill-climbing
-6. Ensemble weight recalibration
-7. Persist all samples to FeedbackStore (SQLite)
-8. Trend check: write RETRAIN_REQUIRED.flag if F1 < 0.75 x 3 cycles
-9. Git commit cycle results via GitManager
+---
 
-## EWC Regularisation
+## Model Files
 
-Prevents catastrophic forgetting during BERT online updates:
-Loss = CrossEntropy(pred, label)
-+ 0.1 * 0.5 * sum(fisher_i * (param_i - stored_param_i)^2)
+| File | Size | Description |
+|---|---|---|
+| models/bert_classifier.pt | 438 MB | BERT fine-tuned weights |
+| models/tfidf_model.keras | 246 MB | TF-IDF DNN weights |
+| models/tfidf_vectorizer.joblib | 5 MB | Fitted TF-IDF vectorizer |
+| models/naive_bayes.pkl | 8 MB | Naive Bayes model |
+| models/nb_vectorizer.pkl | 1 MB | NB vectorizer |
 
-Fisher information approximated as uniform (ones tensors).
-Lambda = 0.1 (configured in config.yaml feedback.ewc_lambda).
+---
 
-## Calibration (src/training/calibration.py)
+## Python 3.12 Compatibility
 
-Post-hoc temperature scaling on validation logits:
-- Learns single T parameter minimising NLL (gradient descent, 50 steps)
-- Applied: logits / T -> sigmoid -> calibrated probability
-- One TemperatureScaler per model in EnsembleCalibrator
+scikit-fuzzy uses the removed imp module. This is patched via
+src/utils/skfuzzy_compat.py which must be imported before skfuzzy.
+The FuzzyEngine handles this automatically.

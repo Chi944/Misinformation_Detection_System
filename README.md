@@ -11,7 +11,7 @@ backward propagation feedback loop with EWC regularisation.
 - **BERT** (PyTorch) — transformer-based classifier (bert-base-uncased)
 - **TF-IDF DNN** (TensorFlow/Keras) — word + char n-gram deep network
 - **Naive Bayes** (scikit-learn) — fast probabilistic baseline with online learning
-- **Ensemble** — weighted combination (weights from grid search on val; latest: BERT 0.2, TF-IDF 0.7, NB 0.1)
+- **Ensemble** — weighted combination (weights from grid search on val; latest: BERT 0.1, TF-IDF 0.8, NB 0.1)
 - **Fuzzy Logic** — manual Mamdani inference engine, 18 rules, Python 3.12 safe
 - **LLM Judge** — local Ollama (llama3), no API key required
 - **Feedback Loop** — backward propagation with EWC regularisation

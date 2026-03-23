@@ -170,3 +170,10 @@ class EnsembleCalibrator:
             if name not in self.scalers:
                 self.scalers[name] = TemperatureScaler()
             self.scalers[name].load_state(s)
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compatible alias.
+# Some tooling/tests expect `Calibration` to be importable from this module.
+# ---------------------------------------------------------------------------
+Calibration = EnsembleCalibrator

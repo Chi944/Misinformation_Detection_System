@@ -235,3 +235,10 @@ class EvaluationDashboard:
             vmax=1,
         )
         ax.set_title("Model Agreement Heatmap " "(fraction of samples where models agree)")
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compatible alias.
+# Some tooling/tests expect `Dashboard` to be importable from this module.
+# ---------------------------------------------------------------------------
+Dashboard = EvaluationDashboard

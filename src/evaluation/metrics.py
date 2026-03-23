@@ -191,3 +191,10 @@ class MetricsCalculator:
                 "f1": float(f1_score(yt, yp, zero_division=0)),
             }
         return breakdown
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compatible alias.
+# The checklist/tooling expects `Metrics` to be importable from this module.
+# ---------------------------------------------------------------------------
+Metrics = MetricsCalculator

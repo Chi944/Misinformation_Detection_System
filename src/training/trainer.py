@@ -299,3 +299,10 @@ class MasterTrainer:
             self._gate_check("ensemble", results["ensemble"])
 
         return results
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compatible alias.
+# Some tooling/tests expect `Trainer` to be importable from this module.
+# ---------------------------------------------------------------------------
+Trainer = MasterTrainer

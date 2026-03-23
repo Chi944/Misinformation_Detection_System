@@ -232,3 +232,10 @@ class MisinformationDataset:
         self._split()
         self.logger.info("Synthetic dataset created: %d samples", len(rows))
         return self
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compatible alias.
+# Some tooling/tests expect `Dataset` to be importable from this module.
+# ---------------------------------------------------------------------------
+Dataset = MisinformationDataset

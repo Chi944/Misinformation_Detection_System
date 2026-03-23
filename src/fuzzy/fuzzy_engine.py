@@ -102,6 +102,40 @@ class FuzzyMisinformationEngine:
             LOGGER.warning("Fuzzy compute failed (%s), returning 0.5", exc)
             return 0.5
 
+    # ------------------------------------------------------------------ API
+    def evaluate(
+        self,
+        source_credibility: float,
+        bert_confidence: float,
+        tfidf_confidence: float,
+        nb_confidence: float = 0.5,
+        model_agreement: float = 0.5,
+        feedback_score: float = 0.5,
+    ) -> float:
+        """
+        Backwards-compatible wrapper expected by older tooling/tests.
+
+        Args:
+            source_credibility: credibility score in [0,1]
+            bert_confidence: BERT confidence for misinfo in [0,1]
+            tfidf_confidence: TF-IDF confidence for misinfo in [0,1]
+            nb_confidence: NB confidence for misinfo (defaults to neutral 0.5)
+            model_agreement: agreement score (defaults to neutral 0.5)
+            feedback_score: feedback/error score (defaults to neutral 0.5)
+        """
+        return float(
+            self.compute(
+                {
+                    "source_credibility": source_credibility,
+                    "bert_confidence": bert_confidence,
+                    "tfidf_confidence": tfidf_confidence,
+                    "nb_confidence": nb_confidence,
+                    "model_agreement": model_agreement,
+                    "feedback_score": feedback_score,
+                }
+            )
+        )
+
     def _manual_compute(self, inputs: dict) -> float:
         """
         Core manual Mamdani implementation.
@@ -191,3 +225,10 @@ class FuzzyMisinformationEngine:
 
         result = fuzz.defuzz(self.UNIVERSE, aggregated, "centroid")
         return float(np.clip(result, 0.0, 1.0))
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compatible alias.
+# Some tooling/tests expect `FuzzyEngine` to be importable from this module.
+# ---------------------------------------------------------------------------
+FuzzyEngine = FuzzyMisinformationEngine

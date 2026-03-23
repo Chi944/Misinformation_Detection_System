@@ -23,6 +23,8 @@ feedback:
   bert_update_lr: 5.0e-06
   bert_update_steps: 3
   consecutive_fail_limit: 3
+  enabled: true
+  ewc_lambda: 0.1
   high_error_threshold: 0.25
   min_f1_threshold: 0.75
   tfidf_update_epochs: 2

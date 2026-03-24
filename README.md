@@ -28,10 +28,10 @@ Ensemble weights optimised via grid search on validation set.
 
 | Model | Accuracy | F1 | Precision | Weight |
 |---|---|---|---|---|
-| BERT | 0.620 | 0.632 | 0.542 | 10% |
-| TF-IDF DNN | 0.656 | 0.653 | 0.616 | 80% |
-| Naive Bayes | 0.634 | 0.623 | 0.627 | 10% |
-| **Ensemble** | **0.682** | **0.663** | **0.644** | - |
+| BERT | 0.620 | 0.632 | 0.599 | 30% |
+| TF-IDF DNN | 0.642 | 0.643 | 0.626 | 40% |
+| Naive Bayes | 0.634 | 0.623 | 0.627 | 30% |
+| **Ensemble** | **0.684** | **0.675** | **0.678** | - |
 
 - 0 prediction errors on 500-sample evaluation
 - 54 pytest tests passing, 8/8 smoke tests passing
@@ -109,7 +109,7 @@ models/         bert_classifier.pt, tfidf_model.keras,
 
 ## Ensemble Weights
 
-Current weights (bert=0.1, tfidf=0.8, nb=0.1) were found via grid search
+Current weights (bert=0.3, tfidf=0.4, nb=0.3) were found via grid search
 on the validation set. To re-optimise after retraining:
 
 ```bash

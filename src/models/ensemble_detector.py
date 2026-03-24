@@ -23,9 +23,9 @@ class EnsembleWeights:
 
     # Default weights are aligned with the most recent grid-search best values.
     # `config.yaml` can override these at runtime.
-    bert: float = 0.1
-    tfidf: float = 0.8
-    naive_bayes: float = 0.1
+    bert: float = 0.3
+    tfidf: float = 0.4
+    naive_bayes: float = 0.3
 
     def as_array(self) -> np.ndarray:
         w = np.asarray([self.bert, self.tfidf, self.naive_bayes], dtype="float32")
@@ -72,9 +72,9 @@ class EnsembleDetector:
         m = self.config.get("models", {}) if isinstance(self.config, dict) else {}
         base = {
             # Fallback defaults (used only if config.yaml doesn't specify weights).
-            "bert": float(m.get("bert", {}).get("weight", 0.1)),
-            "tfidf": float(m.get("tfidf", {}).get("weight", 0.8)),
-            "naive_bayes": float(m.get("naive_bayes", {}).get("weight", 0.1)),
+            "bert": float(m.get("bert", {}).get("weight", 0.3)),
+            "tfidf": float(m.get("tfidf", {}).get("weight", 0.4)),
+            "naive_bayes": float(m.get("naive_bayes", {}).get("weight", 0.3)),
         }
         active: Dict[str, float] = {}
         if self.bert_model is not None and self.bert_tokenizer is not None:

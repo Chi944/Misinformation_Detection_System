@@ -129,22 +129,23 @@ Invoke-Step -Name "Build frontend (npm run build)" -Action {
 Invoke-Step -Name "Sync project files to HF deploy folder" -Action {
     $srcDir = Join-Path $MainProject "src"
     $modelsDir = Join-Path $MainProject "models"
-    $frontendDir = Join-Path $MainProject "frontend"
+    $frontendDistDir = Join-Path $MainProject "frontend\dist"
     $dstSrc = Join-Path $HfDeploy "src"
     $dstModels = Join-Path $HfDeploy "models"
-    $dstFrontend = Join-Path $HfDeploy "frontend"
+    $dstFrontendDist = Join-Path $HfDeploy "frontend\dist"
 
     if (-not (Test-Path $srcDir)) { throw "Missing source folder: $srcDir" }
     if (-not (Test-Path $modelsDir)) { throw "Missing models folder: $modelsDir" }
-    if (-not (Test-Path $frontendDir)) { throw "Missing frontend folder: $frontendDir" }
+    if (-not (Test-Path $frontendDistDir)) { throw "Missing built frontend dist folder: $frontendDistDir" }
 
     Invoke-Robocopy -Source $srcDir -Destination $dstSrc
     Invoke-Robocopy -Source $modelsDir -Destination $dstModels
-    # Copy frontend while excluding node_modules
-    robocopy $frontendDir $dstFrontend /MIR /XD node_modules /NFL /NDL /NJH /NJS /NP | Out-Host
+    # Copy only built frontend assets to HuggingFace deploy workspace.
+    # This guarantees node_modules is never copied.
+    robocopy $frontendDistDir $dstFrontendDist /MIR /NFL /NDL /NJH /NJS /NP | Out-Host
     $frontendCopyCode = $LASTEXITCODE
     if ($frontendCopyCode -gt 7) {
-        throw "robocopy failed from '$frontendDir' to '$dstFrontend' with exit code $frontendCopyCode"
+        throw "robocopy failed from '$frontendDistDir' to '$dstFrontendDist' with exit code $frontendCopyCode"
     }
 
     Copy-FileChecked -SourceFile (Join-Path $MainProject "api.py") -DestinationDir $HfDeploy

@@ -112,7 +112,20 @@ Invoke-Step -Name "Push main project to GitHub (origin/main)" -Action {
     Invoke-GitCommitAndPush -RepoPath $MainProject -RemoteName "origin" -Branch "main"
 }
 
-# --- 2) Sync files to HF deploy workspace ---
+# --- 2) Build frontend ---
+Invoke-Step -Name "Build frontend (npm run build)" -Action {
+    $frontendProjectDir = Join-Path $MainProject "frontend"
+    if (-not (Test-Path $frontendProjectDir)) { throw "Missing frontend folder: $frontendProjectDir" }
+    Push-Location $frontendProjectDir
+    try {
+        npm run build
+        if ($LASTEXITCODE -ne 0) { throw "npm run build failed in $frontendProjectDir" }
+    } finally {
+        Pop-Location
+    }
+}
+
+# --- 3) Sync files to HF deploy workspace ---
 Invoke-Step -Name "Sync project files to HF deploy folder" -Action {
     $srcDir = Join-Path $MainProject "src"
     $modelsDir = Join-Path $MainProject "models"
@@ -165,7 +178,7 @@ Invoke-Step -Name "Sync project files to HF deploy folder" -Action {
     Write-Host "Rewrote HF requirements (UTF-8): removed tensorflow-intel/datasets, updated tqdm/requests"
 }
 
-# --- 3) Push HF deploy workspace to HuggingFace remote ---
+# --- 4) Push HF deploy workspace to HuggingFace remote ---
 Invoke-Step -Name "Push HF deploy folder to HuggingFace (huggingface/main)" -Action {
     Invoke-GitCommitAndPush -RepoPath $HfDeploy -RemoteName "huggingface" -Branch "main"
 }

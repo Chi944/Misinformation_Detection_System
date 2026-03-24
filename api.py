@@ -29,6 +29,10 @@ FRONTEND_DIR = FRONTEND_DIST if os.path.exists(FRONTEND_DIST) else (
     FRONTEND_BUILD if os.path.exists(FRONTEND_BUILD) else None
 )
 
+# Explicit app UI mount for both local and hosted usage.
+if os.path.exists(FRONTEND_DIST):
+    app.mount("/app", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

@@ -135,6 +135,26 @@ ollama pull mistral
 curl http://localhost:11434/api/tags
 ```
 
+## Running Locally with Ollama
+
+1. Open Terminal 1 and run: `ollama serve`
+   - Keep this terminal open at all times
+2. First time only - Open Terminal 2 and run: `ollama pull mistral`
+3. Open Terminal 3 and run:
+
+```bash
+cd C:\Users\Desto\orchids-projects\orchids-misinformation-detection-app
+.venv\Scripts\activate
+python api.py
+```
+
+4. Open browser at http://localhost:8000/app
+
+Notes:
+- Ollama must be running BEFORE starting `api.py` otherwise the LLM judge will be disabled.
+- The app still works without Ollama but LLM reasoning will be unavailable.
+- `ollama pull mistral` only needs to be run once.
+
 ---
 
 ## Verify Everything Works

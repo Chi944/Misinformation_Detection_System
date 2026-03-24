@@ -11,6 +11,7 @@ from typing import Optional
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -22,8 +23,11 @@ from src.detector import MisinformationDetector  # noqa: E402
 app = FastAPI(title="Misinformation Detection API", version="1.0")
 detector = None
 
-if os.path.exists("frontend"):
-    app.mount("/app", StaticFiles(directory="frontend", html=True), name="frontend")
+FRONTEND_DIST = os.path.join("frontend", "dist")
+FRONTEND_BUILD = os.path.join("frontend", "build")
+FRONTEND_DIR = FRONTEND_DIST if os.path.exists(FRONTEND_DIST) else (
+    FRONTEND_BUILD if os.path.exists(FRONTEND_BUILD) else None
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -101,6 +105,65 @@ def get_domains():
             db = json.load(f)
         return {"total": len(db), "sample": dict(list(sorted(db.items(), key=lambda x: -x[1]))[:10])}
     return {"total": 0, "sample": {}}
+
+@app.get("/", response_class=HTMLResponse)
+def root():
+    """Serve built frontend index.html, or fallback form when not built."""
+    if FRONTEND_DIR is not None:
+        index_path = os.path.join(FRONTEND_DIR, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+
+    fallback_html = """<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Misinformation Detector API</title>
+    <style>
+      body { font-family: Arial, sans-serif; max-width: 820px; margin: 24px auto; padding: 0 16px; }
+      textarea,input,button { width: 100%; margin: 8px 0; padding: 10px; }
+      pre { background: #f5f5f5; padding: 12px; overflow: auto; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h2>Misinformation Detector</h2>
+    <p>Built frontend not found. Using fallback test form.</p>
+    <label>Text</label>
+    <textarea id="text" rows="6" placeholder="Enter text to analyze"></textarea>
+    <label>URL (optional)</label>
+    <input id="url" placeholder="https://example.com/article" />
+    <label><input type="checkbox" id="explain" checked /> explain</label>
+    <button onclick="runPredict()">Submit to /predict</button>
+    <pre id="out"></pre>
+    <script>
+      async function runPredict() {
+        const text = document.getElementById('text').value;
+        const url = document.getElementById('url').value;
+        const explain = document.getElementById('explain').checked;
+        const body = { text, explain };
+        if (url) body.url = url;
+        try {
+          const r = await fetch('/predict', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          const data = await r.json();
+          document.getElementById('out').textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+          document.getElementById('out').textContent = String(e);
+        }
+      }
+    </script>
+  </body>
+</html>"""
+    return HTMLResponse(content=fallback_html, status_code=200)
+
+# Mount built frontend at "/" for production static serving.
+# Kept after API routes so /health, /predict, /domains remain available.
+if FRONTEND_DIR is not None:
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend_root")
 
 
 if __name__ == "__main__":

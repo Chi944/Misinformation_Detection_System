@@ -116,19 +116,53 @@ Invoke-Step -Name "Push main project to GitHub (origin/main)" -Action {
 Invoke-Step -Name "Sync project files to HF deploy folder" -Action {
     $srcDir = Join-Path $MainProject "src"
     $modelsDir = Join-Path $MainProject "models"
+    $frontendDir = Join-Path $MainProject "frontend"
     $dstSrc = Join-Path $HfDeploy "src"
     $dstModels = Join-Path $HfDeploy "models"
+    $dstFrontend = Join-Path $HfDeploy "frontend"
 
     if (-not (Test-Path $srcDir)) { throw "Missing source folder: $srcDir" }
     if (-not (Test-Path $modelsDir)) { throw "Missing models folder: $modelsDir" }
+    if (-not (Test-Path $frontendDir)) { throw "Missing frontend folder: $frontendDir" }
 
     Invoke-Robocopy -Source $srcDir -Destination $dstSrc
     Invoke-Robocopy -Source $modelsDir -Destination $dstModels
+    # Copy frontend while excluding node_modules
+    robocopy $frontendDir $dstFrontend /MIR /XD node_modules /NFL /NDL /NJH /NJS /NP | Out-Host
+    $frontendCopyCode = $LASTEXITCODE
+    if ($frontendCopyCode -gt 7) {
+        throw "robocopy failed from '$frontendDir' to '$dstFrontend' with exit code $frontendCopyCode"
+    }
 
     Copy-FileChecked -SourceFile (Join-Path $MainProject "api.py") -DestinationDir $HfDeploy
     Copy-FileChecked -SourceFile (Join-Path $MainProject "config.yaml") -DestinationDir $HfDeploy
     Copy-FileChecked -SourceFile (Join-Path $MainProject "requirements.txt") -DestinationDir $HfDeploy
     Copy-FileChecked -SourceFile (Join-Path $MainProject "Dockerfile") -DestinationDir $HfDeploy
+
+    # HuggingFace runtime compatibility:
+    # - remove Windows-only/training-only packages
+    # - fix known version conflicts
+    # - rewrite using UTF-8 via a temp file
+    $hfRequirements = Join-Path $HfDeploy "requirements.txt"
+    if (-not (Test-Path $hfRequirements)) {
+        throw "Copied requirements.txt not found in HF deploy folder: $hfRequirements"
+    }
+
+    $tempRequirements = Join-Path $HfDeploy "requirements.tmp.txt"
+
+    $filtered = Get-Content -Path $hfRequirements | Where-Object {
+        $_ -notmatch "tensorflow-intel" -and $_ -notmatch "^\s*datasets(\s*[=<>!~].*)?\s*$"
+    } | ForEach-Object {
+        $line = $_
+        $line = $line -replace "^\s*tqdm==4\.66\.2\s*$", "tqdm==4.66.3"
+        $line = $line -replace "^\s*requests==2\.31\.0\s*$", "requests==2.32.2"
+        $line
+    }
+
+    Set-Content -Path $tempRequirements -Value $filtered -Encoding UTF8
+    Move-Item -Path $tempRequirements -Destination $hfRequirements -Force
+
+    Write-Host "Rewrote HF requirements (UTF-8): removed tensorflow-intel/datasets, updated tqdm/requests"
 }
 
 # --- 3) Push HF deploy workspace to HuggingFace remote ---

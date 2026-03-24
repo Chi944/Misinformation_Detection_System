@@ -5,10 +5,13 @@ Run with: python api.py
 """
 
 import os
+import re
 import sys
-from typing import Optional
+from typing import Any, Optional
 
+import requests
 import uvicorn
+from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
@@ -62,7 +65,21 @@ class PredictResponse(BaseModel):
     model_breakdown: dict
     source_credibility: Optional[dict] = None
     explanation: Optional[dict] = None
+    llm_judge: Optional[dict] = None
+    text: Optional[str] = None
     error: Optional[str] = None
+
+
+class ScrapeRequest(BaseModel):
+    url: str
+    explain: Optional[bool] = True
+
+
+class ScrapePredictResponse(PredictResponse):
+    scraped_url: str
+    scraped_preview: str
+    scraped_word_count: int
+    scraped_char_count: int
 
 
 @app.get("/health")
@@ -94,9 +111,73 @@ def predict(request: PredictRequest):
             model_breakdown=result.get("model_breakdown", {}),
             source_credibility=result.get("source_credibility"),
             explanation=result.get("explanation"),
+            llm_judge=result.get("llm_judge"),
+            text=request.text,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _clean_scraped_text(html: str) -> str:
+    soup = BeautifulSoup(html, "lxml")
+    for tag in soup(["script", "style", "noscript", "nav", "footer", "header", "aside", "form"]):
+        tag.decompose()
+    text = soup.get_text(separator=" ")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+@app.post("/scrape-and-predict", response_model=ScrapePredictResponse)
+async def scrape_and_predict(request: ScrapeRequest):
+    if detector is None:
+        raise HTTPException(status_code=503, detail="Detector not ready")
+    if not request.url:
+        raise HTTPException(status_code=400, detail="URL is required")
+
+    try:
+        resp = requests.get(
+            request.url,
+            timeout=20,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; MisinformationDetector/1.0)"},
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {e}")
+
+    text = _clean_scraped_text(resp.text)
+    if len(text) < 20:
+        raise HTTPException(status_code=400, detail="Could not extract enough text from URL")
+
+    words = text.split()
+    word_count = len(words)
+    char_count = len(text)
+    preview = text[:400] + ("..." if len(text) > 400 else "")
+
+    try:
+        result = detector.predict(text, url=request.url, explain=bool(request.explain))
+        verdict = result.get("verdict") or result.get("crisp_label", "UNKNOWN")
+        return ScrapePredictResponse(
+            verdict=verdict,
+            ensemble_probability=float(result.get("ensemble_probability", 0.5)),
+            confidence_percent=int(abs(result.get("ensemble_probability", 0.5) - 0.5) * 200),
+            model_breakdown=result.get("model_breakdown", {}),
+            source_credibility=result.get("source_credibility"),
+            explanation=result.get("explanation"),
+            llm_judge=result.get("llm_judge"),
+            text=text,
+            scraped_url=request.url,
+            scraped_preview=preview,
+            scraped_word_count=word_count,
+            scraped_char_count=char_count,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/llm-status")
+async def llm_status():
+    available = bool(detector is not None and getattr(detector, "llm_judge", None) is not None)
+    return {"llm_available": available}
 
 
 @app.get("/domains")

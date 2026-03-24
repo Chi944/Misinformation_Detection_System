@@ -1,99 +1,109 @@
-import React, { useState } from "react";
-import axios from "axios";
+import React, { useEffect, useState } from "react";
 import "./index.css";
 
-// In dev, use "" so Vite proxies to backend; otherwise use env or fallback
-const API_BASE: string =
-  import.meta.env.VITE_API_BASE ??
-  (import.meta.env.DEV ? "" : "http://127.0.0.1:5000");
-
-type LexicalDiversity = {
-  type_token_ratio: number;
-  unique_words: number;
-  total_words: number;
-  avg_word_length: number;
-  avg_sentence_length: number;
-  sentence_count: number;
-};
-
-type CredibilityAudit = {
-  sensationalism: number;
-  political_bias: {
-    direction: string;
-    score: number;
-    confidence: number;
-  };
-  source_credibility: {
-    score: number | null;
-    domain: string | null;
-    tier: string;
-  };
-  factuality_index: number;
-  flagged_terms: Array<{ term: string; weight: number; reason: string }>;
-  lexical_diversity?: LexicalDiversity;
-};
+const API_BASE: string = window.location.origin;
 
 type PredictionResponse = {
-  text: string;
-  prediction: string;
-  label: number;
-  confidence: number;
-  model: string;
-  latency_ms: number;
-  within_latency_constraint: boolean;
-  probabilities: Record<string, number>;
-  credibility_audit?: CredibilityAudit;
+  verdict: string;
+  ensemble_probability: number;
+  confidence_percent: number;
+  model_breakdown: Record<string, { confidence: number }>;
+  source_credibility?: { domain: string; score: number; label: string };
+  llm_judge?: { verdict?: string; reasoning?: string; explanation?: string };
+  text?: string;
+  scraped_url?: string;
+  scraped_preview?: string;
+  scraped_word_count?: number;
+  scraped_char_count?: number;
   explanation?: {
-    top_features: Array<[string, number]>;
+    summary?: {
+      misinfo_indicators?: string[];
+      credible_indicators?: string[];
+    };
   };
 };
 
-type InputMode = "text" | "url";
-
 const App: React.FC = () => {
-  const [mode, setMode] = useState<InputMode>("text");
   const [text, setText] = useState("");
   const [url, setUrl] = useState("");
-  const [header, setHeader] = useState("");
-  const [includeExplanation, setIncludeExplanation] = useState(true);
+  const [showWordAnalysis, setShowWordAnalysis] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PredictionResponse | null>(null);
+  const [sessionCount, setSessionCount] = useState(0);
+  const [scrapeInfo, setScrapeInfo] = useState<string>("");
+  const [llmAvailable, setLlmAvailable] = useState(false);
 
-  const canSubmit =
-    !loading &&
-    ((mode === "text" && text.trim().length > 0) ||
-      (mode === "url" && url.trim().length > 0));
+  const canPredictText = !loading && text.trim().length > 0;
+  const canPredictUrl = !loading && url.trim().length > 0;
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const loadLlmStatus = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/llm-status`);
+      const data = await r.json();
+      setLlmAvailable(Boolean(data.llm_available));
+    } catch {
+      setLlmAvailable(false);
+    }
+  };
+
+  useEffect(() => {
+    loadLlmStatus();
+  }, []);
+
+  const runPredictText = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canSubmit) return;
+    if (!canPredictText) return;
     setLoading(true);
     setError(null);
     setResult(null);
+    setScrapeInfo("");
 
     try {
-      const payload: any = { include_explanation: includeExplanation };
-      if (mode === "text") {
-        payload.text = text;
-      } else {
-        payload.url = url;
-        if (header.trim()) {
-          payload.header = header.trim();
-        }
-      }
-
-      const response = await axios.post<PredictionResponse>(
-        `${API_BASE}/predict`,
-        payload
-      );
-      setResult(response.data);
+      const body: any = {
+        text: text.trim(),
+        explain: showWordAnalysis,
+      };
+      if (url.trim()) body.url = url.trim();
+      const r = await fetch(`${API_BASE}/predict`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || "API error");
+      setResult(data);
+      setSessionCount((v) => v + 1);
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.error ||
-        err?.message ||
-        "Request failed. Is the API running?";
-      setError(msg);
+      setError(err?.message || "Request failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const runScrapePredict = async () => {
+    if (!canPredictUrl) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const r = await fetch(`${API_BASE}/scrape-and-predict`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: url.trim(),
+          explain: showWordAnalysis,
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || "API error");
+      setResult(data);
+      setSessionCount((v) => v + 1);
+      setScrapeInfo(
+        `Analysed ${data.scraped_word_count ?? 0} words from ${data.scraped_url ?? url.trim()}`
+      );
+    } catch (err: any) {
+      setError(err?.message || "Request failed");
     } finally {
       setLoading(false);
     }
@@ -116,81 +126,62 @@ const App: React.FC = () => {
         <p className="section-label">Our approach</p>
         <h2 id="analyse-heading" className="section-title">Analyse</h2>
         <p className="section-intro">
-          Paste text, a headline, or a URL. We classify content and return a credibility audit with sensationalism, bias, factuality, and flagged terms.
+          Paste text or submit only a URL. The app supports source credibility, explainability,
+          model breakdown, URL scraping, and local LLM judge status.
         </p>
         <main className="app-main">
           <div className="card">
             <h2>Input</h2>
-          <form onSubmit={handleSubmit} className="form">
-            <div className="form-row">
-              <label className="label-inline">
-                Input mode
-                <select
-                  value={mode}
-                  onChange={(e) => setMode(e.target.value as InputMode)}
-                >
-                  <option value="text">Free text / headline</option>
-                  <option value="url">URL + optional header</option>
-                </select>
-              </label>
-            </div>
-
-            {mode === "text" ? (
-              <label className="label">
-                Text to analyse
-                <textarea
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder="Paste or type a news headline / post to classify..."
-                  rows={6}
-                />
-              </label>
-            ) : (
-              <>
-                <label className="label">
-                  URL to analyse
-                  <input
-                    type="url"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    placeholder="https://example.com/news/article"
-                  />
-                </label>
-                <label className="label">
-                  Optional headline / context
-                  <input
-                    type="text"
-                    value={header}
-                    onChange={(e) => setHeader(e.target.value)}
-                    placeholder="Article headline or short summary (optional)"
-                  />
-                </label>
-              </>
-            )}
-
+          <form onSubmit={runPredictText} className="form">
+            <label className="label">
+              Text to analyse
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="Paste or type text to classify..."
+                rows={6}
+              />
+            </label>
+            <label className="label">
+              Source URL (optional)
+              <input
+                type="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://example.com/news/article"
+              />
+            </label>
             <div className="form-row">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
-                  checked={includeExplanation}
-                  onChange={(e) => setIncludeExplanation(e.target.checked)}
+                  checked={showWordAnalysis}
+                  onChange={(e) => setShowWordAnalysis(e.target.checked)}
                 />
-                Include explanation (LIME)
+                Show word analysis (highlight words driving prediction)
               </label>
+              <span className={`pill ${llmAvailable ? "" : "pill-warn"}`}>
+                LLM Judge: <strong>{llmAvailable ? "Active" : "Offline"}</strong>
+              </span>
             </div>
 
-            <button
-              type="submit"
-              className="primary-button"
-              disabled={!canSubmit}
-            >
+            <button type="submit" className="primary-button" disabled={!canPredictText}>
               {loading ? "Predicting..." : "Run prediction"}
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={!canPredictUrl}
+              onClick={runScrapePredict}
+            >
+              {loading ? "Scraping..." : "Analyse URL only"}
             </button>
 
             <p className="hint">
-              API:{" "}
-              <code>{API_BASE || "same origin (proxied to :5000)"}</code>
+              API: <code>{API_BASE}</code>
             </p>
+            <p className="hint">Texts analysed this session: <strong>{sessionCount}</strong></p>
+            {scrapeInfo && <p className="hint">{scrapeInfo}</p>}
           </form>
           </div>
 
@@ -213,156 +204,103 @@ const App: React.FC = () => {
             <div className="result">
               <div className="result-header">
                 <span className="pill">
-                  Model: <strong>TF-IDF + Logistic</strong>
+                  Model: <strong>BERT + TF-IDF + NB Ensemble</strong>
                 </span>
-                <span className="pill">
-                  Latency: <strong>{result.latency_ms.toFixed(2)} ms</strong>
-                </span>
-                {!result.within_latency_constraint && (
-                  <span className="pill pill-warn">Slow</span>
-                )}
               </div>
 
               <div className="result-main">
                 <div className="prediction-badge">
                   <span className="prediction-label">
-                    {result.prediction}
+                    {result.verdict}
                   </span>
                   <span className="prediction-confidence">
-                    {(result.confidence * 100).toFixed(1)}% confidence
+                    {(result.ensemble_probability * 100).toFixed(1)}% misinformation
                   </span>
                 </div>
 
-                <div className="text-preview">
-                  <h3>Analysed text</h3>
-                  <p>{result.text}</p>
-                </div>
+                {result.source_credibility && (
+                  <p className="hint">
+                    Source credibility: {result.source_credibility.domain} (
+                    {result.source_credibility.label} - {result.source_credibility.score.toFixed(2)})
+                  </p>
+                )}
 
                 <div className="probabilities">
-                  <h3>Class probabilities</h3>
+                  <h3>Model breakdown</h3>
                   <div className="prob-bars">
-                    {Object.entries(result.probabilities).map(
-                      ([label, prob]) => (
-                        <div key={label} className="prob-bar-row">
-                          <span className="prob-label">{label}</span>
-                          <div className="prob-bar-track">
-                            <div
-                              className="prob-bar-fill"
-                              style={{ width: `${prob * 100}%` }}
-                            />
-                          </div>
-                          <span className="prob-value">
-                            {(prob * 100).toFixed(1)}%
-                          </span>
+                    {["bert", "tfidf", "naive_bayes"].map((k) => (
+                      <div key={k} className="prob-bar-row">
+                        <span className="prob-label">{k.toUpperCase()}</span>
+                        <div className="prob-bar-track">
+                          <div
+                            className="prob-bar-fill"
+                            style={{
+                              width: `${((result.model_breakdown?.[k]?.confidence ?? 0) * 100).toFixed(1)}%`,
+                            }}
+                          />
                         </div>
-                      )
-                    )}
+                        <span className="prob-value">
+                          {(result.model_breakdown?.[k]?.confidence ?? 0).toFixed(3)}
+                        </span>
+                      </div>
+                    ))}
+                    <div className="prob-bar-row">
+                      <span className="prob-label">ENSEMBLE</span>
+                      <div className="prob-bar-track">
+                        <div
+                          className="prob-bar-fill"
+                          style={{ width: `${(result.ensemble_probability * 100).toFixed(1)}%` }}
+                        />
+                      </div>
+                      <span className="prob-value">{result.ensemble_probability.toFixed(3)}</span>
+                    </div>
                   </div>
                 </div>
 
-                {result.credibility_audit && (
-                  <div className="credibility-audit">
-                    <h3>Credibility audit</h3>
-                    <div className="audit-metrics">
-                      <div className="audit-metric">
-                        <span className="audit-label">Sensationalism</span>
-                        <div className="audit-bar-track">
-                          <div
-                            className="audit-bar-fill sensational"
-                            style={{
-                              width: `${result.credibility_audit.sensationalism * 100}%`,
-                            }}
-                          />
-                        </div>
-                        <span className="audit-value">
-                          {(result.credibility_audit.sensationalism * 100).toFixed(1)}%
-                        </span>
-                      </div>
-                      <div className="audit-metric">
-                        <span className="audit-label">Political bias</span>
-                        <span className="audit-value">
-                          {result.credibility_audit.political_bias.direction}{" "}
-                          ({(result.credibility_audit.political_bias.score * 100).toFixed(0)}%)
-                        </span>
-                      </div>
-                      <div className="audit-metric">
-                        <span className="audit-label">Source credibility</span>
-                        <span className="audit-value">
-                          {result.credibility_audit.source_credibility.score != null ? (
-                            <>
-                              {result.credibility_audit.source_credibility.tier}{" "}
-                              ({(result.credibility_audit.source_credibility.score * 100).toFixed(0)}%)
-                              {result.credibility_audit.source_credibility.domain && (
-                                <> — <code>{result.credibility_audit.source_credibility.domain}</code></>
-                              )}
-                            </>
-                          ) : (
-                            "N/A (no URL)"
-                          )}
-                        </span>
-                      </div>
-                      <div className="audit-metric">
-                        <span className="audit-label">Factuality index</span>
-                        <div className="audit-bar-track">
-                          <div
-                            className="audit-bar-fill factual"
-                            style={{
-                              width: `${result.credibility_audit.factuality_index * 100}%`,
-                            }}
-                          />
-                        </div>
-                        <span className="audit-value">
-                          {(result.credibility_audit.factuality_index * 100).toFixed(1)}%
-                        </span>
-                      </div>
-                      {result.credibility_audit.lexical_diversity && (
-                        <div className="audit-metric lexical-diversity">
-                          <span className="audit-label">Lexical diversity</span>
-                          <span className="audit-value">
-                            TTR: {result.credibility_audit.lexical_diversity.type_token_ratio.toFixed(2)} · {result.credibility_audit.lexical_diversity.unique_words} unique / {result.credibility_audit.lexical_diversity.total_words} words · avg word: {result.credibility_audit.lexical_diversity.avg_word_length} chars · avg sentence: {result.credibility_audit.lexical_diversity.avg_sentence_length} words
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                    {result.credibility_audit.flagged_terms.length > 0 && (
-                      <div className="flagged-terms">
-                        <h4>Flagged terms</h4>
-                        <p className="hint">
-                          Words that may reduce credibility:
-                        </p>
-                        <div className="flagged-list">
-                          {result.credibility_audit.flagged_terms.map(
-                            (ft) => (
-                              <span
-                                key={`${ft.term}-${ft.reason}`}
-                                className="flagged-term"
-                                title={`${ft.reason}, weight: ${ft.weight.toFixed(2)}`}
-                              >
-                                {ft.term}
-                              </span>
-                            )
-                          )}
-                        </div>
-                      </div>
-                    )}
+                {!!result.scraped_preview && (
+                  <div className="text-preview">
+                    <h3>Scraped preview</h3>
+                    <p>{result.scraped_preview}</p>
                   </div>
                 )}
 
-                {result.explanation && (
+                {!!result.llm_judge && llmAvailable && (
                   <div className="explanation">
-                    <h3>Top contributing features</h3>
-                    <ul>
-                      {result.explanation.top_features.map(
-                        ([feature, weight]) => (
-                          <li key={feature}>
-                            <span className="feature">{feature}</span>
-                            <span className="weight">
-                              {weight.toFixed(3)}
-                            </span>
-                          </li>
-                        )
-                      )}
-                    </ul>
+                    <h3>LLM Judge</h3>
+                    <p>
+                      {(result.llm_judge.reasoning ||
+                        result.llm_judge.explanation ||
+                        result.llm_judge.verdict ||
+                        "Reasoning available")}
+                    </p>
+                  </div>
+                )}
+
+                {result.explanation?.summary && (
+                  <div className="explanation">
+                    <h3>Word analysis</h3>
+                    <div className="flagged-list">
+                      {(result.explanation.summary.misinfo_indicators || []).map((w) => (
+                        <span key={`mis-${w}`} className="flagged-term">
+                          {w}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flagged-list" style={{ marginTop: "0.75rem" }}>
+                      {(result.explanation.summary.credible_indicators || []).map((w) => (
+                        <span
+                          key={`cred-${w}`}
+                          className="flagged-term"
+                          style={{
+                            background: "rgba(93, 232, 154, 0.12)",
+                            borderColor: "rgba(93, 232, 154, 0.3)",
+                            color: "#9af2bf",
+                          }}
+                        >
+                          {w}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -375,7 +313,7 @@ const App: React.FC = () => {
       <footer className="app-footer">
         <div className="app-footer-inner">
           <span>
-            Backend: <code>Flask</code> &nbsp;·&nbsp; Frontend:{" "}
+            Backend: <code>FastAPI</code> &nbsp;·&nbsp; Frontend:{" "}
             <code>React + Vite</code>
           </span>
           <a href="#analyse" className="footer-link">

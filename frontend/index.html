@@ -7,47 +7,62 @@
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh;display:flex;justify-content:center;padding:40px 20px}
-    .container{width:100%;max-width:760px}
+    .container{width:100%;max-width:860px}
     .card{background:#1e2130;border:1px solid #2d3148;border-radius:12px;padding:24px;margin-bottom:16px}
     h1{text-align:center;margin-bottom:8px}
     .sub{text-align:center;color:#94a3b8;margin-bottom:20px}
     label{display:block;font-size:.85rem;color:#94a3b8;margin-bottom:8px}
     textarea,input{width:100%;background:#0f1117;border:1px solid #2d3148;border-radius:8px;color:#e2e8f0;padding:12px}
     textarea{min-height:120px;resize:vertical}
-    button{width:100%;padding:12px;border:none;border-radius:8px;background:#6366f1;color:#fff;font-weight:600;cursor:pointer;margin-top:14px}
-    .status{display:flex;justify-content:center;margin-bottom:14px;color:#94a3b8}
-    .dot{width:8px;height:8px;border-radius:50%;background:#64748b;margin-right:8px;margin-top:6px}
+    button{padding:12px;border:none;border-radius:8px;background:#6366f1;color:#fff;font-weight:600;cursor:pointer;margin-top:14px}
+    .btn-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .status{display:flex;justify-content:center;align-items:center;gap:8px;margin-bottom:14px;color:#94a3b8}
+    .dot{width:8px;height:8px;border-radius:50%;background:#64748b}
     .ok{background:#22c55e}.err{background:#ef4444}
+    .pill{padding:4px 8px;border-radius:999px;background:#374151;color:#e5e7eb;font-size:.78rem}
     .hidden{display:none}
     .result h2{margin-bottom:8px}
-    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+    .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
     .mini{background:#0f1117;border:1px solid #2d3148;border-radius:8px;padding:10px;text-align:center}
     .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
     .chip{padding:4px 10px;border-radius:999px;font-size:.8rem}
     .mis{background:#3b0a0a;color:#fca5a5}.cred{background:#052e16;color:#86efac}
+    .meta{color:#94a3b8;font-size:.9rem;margin-top:10px}
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Misinformation Detector</h1>
     <div class="sub">Three-model ensemble - BERT · TF-IDF · Naive Bayes</div>
-    <div class="status"><span id="dot" class="dot"></span><span id="status">Connecting to API...</span></div>
+    <div class="status">
+      <span id="dot" class="dot"></span><span id="status">Connecting to API...</span>
+      <span id="llmBadge" class="pill">LLM Judge: Offline</span>
+    </div>
     <div class="card">
       <label>Text to analyse</label>
       <textarea id="text" placeholder="Paste or type text..."></textarea>
       <label style="margin-top:12px">Source URL (optional)</label>
       <input id="url" type="text" placeholder="https://example.com/article">
-      <label style="margin-top:10px"><input id="explain" type="checkbox" checked> Show word analysis</label>
-      <button onclick="analyse()">Analyse Text</button>
+      <label style="margin-top:10px"><input id="explain" type="checkbox" checked> Show word analysis (highlight words driving prediction)</label>
+      <div class="btn-row">
+        <button onclick="analyseText()">Analyse Text</button>
+        <button onclick="analyseUrlOnly()">Analyse URL only</button>
+      </div>
+      <div id="counter" class="meta">Texts analysed this session: 0</div>
+      <div id="scrapeMeta" class="meta hidden"></div>
     </div>
     <div id="error" class="card hidden"></div>
     <div id="result" class="card result hidden">
       <h2 id="verdict"></h2>
-      <div id="prob"></div>
+      <div id="prob" class="meta"></div>
       <div class="grid" id="models" style="margin-top:12px"></div>
       <div id="sourceWrap" class="hidden" style="margin-top:12px">
         <h3>Source Credibility</h3>
         <div id="source"></div>
+      </div>
+      <div id="llmWrap" class="hidden" style="margin-top:12px">
+        <h3>LLM Judge Reasoning</h3>
+        <div id="llmReason" class="meta"></div>
       </div>
       <div id="explainWrap" class="hidden" style="margin-top:12px">
         <h3>Word Analysis</h3>
@@ -61,6 +76,28 @@
     // - local:       http://localhost:8000
     // - production:  https://huggingface.co/spaces/... (container port 7860)
     const API = window.location.origin;
+    let analysedCount = 0;
+    let llmAvailable = false;
+
+    function bumpCounter(){
+      analysedCount += 1;
+      counter.textContent = `Texts analysed this session: ${analysedCount}`;
+    }
+
+    async function checkLlmStatus(){
+      try{
+        const r = await fetch(API+'/llm-status');
+        const d = await r.json();
+        llmAvailable = !!d.llm_available;
+        llmBadge.textContent = llmAvailable ? 'LLM Judge: Active' : 'LLM Judge: Offline';
+        llmBadge.style.background = llmAvailable ? '#14532d' : '#374151';
+      }catch{
+        llmAvailable = false;
+        llmBadge.textContent = 'LLM Judge: Offline';
+        llmBadge.style.background = '#374151';
+      }
+    }
+
     async function health(){
       try{
         const r=await fetch(API+'/health'); const d=await r.json();
@@ -68,8 +105,47 @@
         else throw new Error();
       }catch{dot.className='dot err';status.textContent='API not connected - run: python api.py';}
     }
-    async function analyse(){
+
+    function renderResult(data){
+      verdict.textContent='Verdict: '+(data.verdict||'UNKNOWN');
+      prob.textContent='Ensemble probability: '+((data.ensemble_probability||0)*100).toFixed(1)+'% misinfo';
+      const m=data.model_breakdown||{};
+      const ensemble = Number(data.ensemble_probability || 0);
+      models.innerHTML=[
+        ['BERT', ((m.bert||{}).confidence||0)],
+        ['TF-IDF', ((m.tfidf||{}).confidence||0)],
+        ['NB', ((m.naive_bayes||{}).confidence||0)],
+        ['Ensemble', ensemble],
+      ].map(([name,score])=>`<div class="mini"><div>${name}</div><div>${Number(score).toFixed(3)}</div></div>`).join('');
+
+      if(data.source_credibility){
+        const sc=data.source_credibility;
+        source.textContent=`Source credibility: ${sc.domain||'?'} (${sc.label||'unknown'} - ${(sc.score||0).toFixed(2)})`;
+        sourceWrap.classList.remove('hidden');
+      }else sourceWrap.classList.add('hidden');
+
+      const sum=((data.explanation||{}).summary)||{};
+      const misinfo=sum.misinfo_indicators||[]; const credible=sum.credible_indicators||[];
+      if(misinfo.length||credible.length){
+        mis.innerHTML=misinfo.map(w=>`<span class="chip mis">${w}</span>`).join('');
+        cred.innerHTML=credible.map(w=>`<span class="chip cred">${w}</span>`).join('');
+        explainWrap.classList.remove('hidden');
+      }else explainWrap.classList.add('hidden');
+
+      const llm = data.llm_judge || {};
+      const llmText = llm.reasoning || llm.explanation || llm.verdict || '';
+      if(llmAvailable && llmText){
+        llmReason.textContent = llmText;
+        llmWrap.classList.remove('hidden');
+      }else{
+        llmWrap.classList.add('hidden');
+      }
+      result.classList.remove('hidden');
+    }
+
+    async function analyseText(){
       error.classList.add('hidden'); result.classList.add('hidden');
+      scrapeMeta.classList.add('hidden');
       const text=document.getElementById('text').value.trim();
       const url=document.getElementById('url').value.trim();
       const explain=document.getElementById('explain').checked;
@@ -78,28 +154,33 @@
         const body={text,explain}; if(url) body.url=url;
         const resp=await fetch(API+'/predict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         const data=await resp.json(); if(!resp.ok) throw new Error(data.detail||'API error');
-        verdict.textContent='Verdict: '+(data.verdict||'UNKNOWN');
-        prob.textContent='Ensemble probability: '+((data.ensemble_probability||0)*100).toFixed(1)+'% misinfo';
-        const m=data.model_breakdown||{};
-        models.innerHTML=['bert','tfidf','naive_bayes'].map(k=>`<div class="mini"><div>${k}</div><div>${(((m[k]||{}).confidence||0)*100).toFixed(1)}%</div></div>`).join('');
-        if(data.source_credibility){
-          const sc=data.source_credibility;
-          source.textContent=`${sc.domain||'?'} | score=${(sc.score||0).toFixed(2)} | ${sc.label||'unknown'}`;
-          sourceWrap.classList.remove('hidden');
-        }else sourceWrap.classList.add('hidden');
-        const sum=((data.explanation||{}).summary)||{};
-        const misinfo=sum.misinfo_indicators||[]; const credible=sum.credible_indicators||[];
-        if(misinfo.length||credible.length){
-          mis.innerHTML=misinfo.map(w=>`<span class="chip mis">${w}</span>`).join('');
-          cred.innerHTML=credible.map(w=>`<span class="chip cred">${w}</span>`).join('');
-          explainWrap.classList.remove('hidden');
-        }else explainWrap.classList.add('hidden');
-        result.classList.remove('hidden');
+        renderResult(data);
+        bumpCounter();
       }catch(e){
         error.textContent='Error: '+e.message; error.classList.remove('hidden');
       }
     }
-    health(); setInterval(health,10000);
+
+    async function analyseUrlOnly(){
+      error.classList.add('hidden'); result.classList.add('hidden');
+      const url=document.getElementById('url').value.trim();
+      const explain=document.getElementById('explain').checked;
+      if(!url){error.textContent='URL is required for URL-only analysis'; error.classList.remove('hidden'); return;}
+      try{
+        const resp=await fetch(API+'/scrape-and-predict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,explain})});
+        const data=await resp.json(); if(!resp.ok) throw new Error(data.detail||'API error');
+        renderResult(data);
+        scrapeMeta.textContent=`Analysed ${data.scraped_word_count||0} words from ${data.scraped_url||url}`;
+        scrapeMeta.classList.remove('hidden');
+        bumpCounter();
+      }catch(e){
+        error.textContent='Error: '+e.message; error.classList.remove('hidden');
+      }
+    }
+
+    health(); checkLlmStatus();
+    setInterval(health,10000);
+    setInterval(checkLlmStatus,10000);
   </script>
 </body>
 </html>

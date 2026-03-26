@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 # --- Paths and remotes ---
-$MainProject = "C:\Users\Desto\orchids-projects\orchids-misinformation-detection-app"
+$MainProject = "C:\Users\Desto\Desktop\Murdoch\ICT206\misinformation-detection-app"
 $HfDeploy = "C:\Users\Desto\hf-deploy"
 
 $GitHubUrl = "https://github.com/Chi944/Misinformation_Detection_System"

@@ -143,7 +143,7 @@ curl http://localhost:11434/api/tags
 3. Open Terminal 3 and run:
 
 ```bash
-cd C:\Users\Desto\orchids-projects\orchids-misinformation-detection-app
+cd C:\Users\Desto\Desktop\Murdoch\ICT206\misinformation-detection-app
 .venv\Scripts\activate
 python api.py
 ```

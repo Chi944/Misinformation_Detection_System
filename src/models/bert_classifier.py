@@ -74,6 +74,11 @@ class BERTClassifier(nn.Module):
         self._ready = True
         self.logger.info("BERT weights loaded from %s", weights_path)
 
+    # Backwards/compat alias for older scripts and references.
+    def load(self, path=None):
+        """Alias for :meth:`load_weights`."""
+        return self.load_weights(path)
+
     def predict(self, texts):
         """
         Return P(misinfo) for each text.

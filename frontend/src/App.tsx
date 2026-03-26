@@ -87,7 +87,7 @@ const App: React.FC = () => {
     setError(null);
     setResult(null);
     try {
-      const r = await fetch(`${API_BASE}/scrape-and-predict`, {
+      const response = await fetch(`${API_BASE}/scrape-and-predict`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -95,15 +95,22 @@ const App: React.FC = () => {
           explain: showWordAnalysis,
         }),
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || "API error");
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Server error: ${text.substring(0, 100)}`);
+      }
+      const data = await response.json();
+      if (data?.error) {
+        setError(data.error);
+        return;
+      }
       setResult(data);
       setSessionCount((v) => v + 1);
       setScrapeInfo(
         `Analysed ${data.scraped_word_count ?? 0} words from ${data.scraped_url ?? url.trim()}`
       );
     } catch (err: any) {
-      setError(err?.message || "Request failed");
+      setError(`Failed to analyse URL: ${err?.message || "Request failed"}`);
     } finally {
       setLoading(false);
     }

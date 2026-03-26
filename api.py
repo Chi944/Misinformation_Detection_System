@@ -14,7 +14,7 @@ import uvicorn
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -119,7 +119,11 @@ def predict(request: PredictRequest):
 
 
 def _clean_scraped_text(html: str) -> str:
-    soup = BeautifulSoup(html, "lxml")
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:
+        # Fallback parser when lxml is unavailable in runtime.
+        soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "noscript", "nav", "footer", "header", "aside", "form"]):
         tag.decompose()
     text = soup.get_text(separator=" ")
@@ -127,34 +131,33 @@ def _clean_scraped_text(html: str) -> str:
     return text
 
 
-@app.post("/scrape-and-predict", response_model=ScrapePredictResponse)
+@app.post("/scrape-and-predict")
 async def scrape_and_predict(request: ScrapeRequest):
-    if detector is None:
-        raise HTTPException(status_code=503, detail="Detector not ready")
-    if not request.url:
-        raise HTTPException(status_code=400, detail="URL is required")
-
     try:
+        if detector is None:
+            return JSONResponse(status_code=200, content={"error": "Detector not ready. Please try again shortly."})
+        if not request.url:
+            return JSONResponse(status_code=200, content={"error": "URL is required."})
+
         resp = requests.get(
-            request.url,
-            timeout=20,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; MisinformationDetector/1.0)"},
+            request.url.strip(),
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0"},
         )
         resp.raise_for_status()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {e}")
+        text = _clean_scraped_text(resp.content)
+        if len(text) < 50:
+            return JSONResponse(
+                status_code=200,
+                content={"error": "Not enough text found on page to analyse."},
+            )
 
-    text = _clean_scraped_text(resp.text)
-    if len(text) < 20:
-        raise HTTPException(status_code=400, detail="Could not extract enough text from URL")
+        words = text.split()
+        word_count = len(words)
+        char_count = len(text)
+        preview = text[:400] + ("..." if len(text) > 400 else "")
 
-    words = text.split()
-    word_count = len(words)
-    char_count = len(text)
-    preview = text[:400] + ("..." if len(text) > 400 else "")
-
-    try:
-        result = detector.predict(text, url=request.url, explain=bool(request.explain))
+        result = detector.predict(text, url=request.url.strip(), explain=bool(request.explain))
         verdict = result.get("verdict") or result.get("crisp_label", "UNKNOWN")
         return ScrapePredictResponse(
             verdict=verdict,
@@ -165,13 +168,31 @@ async def scrape_and_predict(request: ScrapeRequest):
             explanation=result.get("explanation"),
             llm_judge=result.get("llm_judge"),
             text=text,
-            scraped_url=request.url,
+            scraped_url=request.url.strip(),
             scraped_preview=preview,
             scraped_word_count=word_count,
             scraped_char_count=char_count,
         )
+    except requests.exceptions.Timeout:
+        return JSONResponse(
+            status_code=200,
+            content={"error": "URL request timed out. Try a different URL."},
+        )
+    except requests.exceptions.ConnectionError:
+        return JSONResponse(
+            status_code=200,
+            content={"error": "Could not connect to URL. Check the address and try again."},
+        )
+    except requests.exceptions.RequestException as e:
+        return JSONResponse(
+            status_code=200,
+            content={"error": f"Failed to fetch URL: {str(e)}"},
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=200,
+            content={"error": "Failed to analyse URL: %s" % str(e)},
+        )
 
 
 @app.get("/llm-status")

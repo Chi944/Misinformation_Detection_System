@@ -91,6 +91,9 @@ function Copy-FileChecked {
     if (-not (Test-Path $SourceFile)) {
         throw "Required file not found: $SourceFile"
     }
+    if ([System.IO.Path]::GetFileName($SourceFile).ToLowerInvariant() -eq "readme.txt") {
+        throw "README.txt is explicitly excluded from HF deploy sync: $SourceFile"
+    }
     Copy-Item -Path $SourceFile -Destination $DestinationDir -Force
 }
 
@@ -137,6 +140,12 @@ Invoke-Step -Name "Sync project files to HF deploy folder" -Action {
     if (-not (Test-Path $srcDir)) { throw "Missing source folder: $srcDir" }
     if (-not (Test-Path $modelsDir)) { throw "Missing models folder: $modelsDir" }
     if (-not (Test-Path $frontendDistDir)) { throw "Missing built frontend dist folder: $frontendDistDir" }
+
+    # Ensure README.txt is never present in HF deploy workspace.
+    $hfReadmeTxt = Join-Path $HfDeploy "README.txt"
+    if (Test-Path $hfReadmeTxt) {
+        Remove-Item -Path $hfReadmeTxt -Force
+    }
 
     Invoke-Robocopy -Source $srcDir -Destination $dstSrc
     Invoke-Robocopy -Source $modelsDir -Destination $dstModels

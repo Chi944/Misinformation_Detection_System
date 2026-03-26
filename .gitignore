@@ -34,3 +34,4 @@ frontend/node_modules/
 
 # Model weights (too large for git - store locally or in Drive)
 models/*.h5
+README.txt

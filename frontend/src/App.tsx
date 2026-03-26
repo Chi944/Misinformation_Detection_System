@@ -143,7 +143,7 @@ const App: React.FC = () => {
               />
             </label>
             <label className="label">
-              Source URL (optional)
+              Source URL
               <input
                 type="url"
                 value={url}

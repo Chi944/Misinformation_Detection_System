@@ -8,15 +8,15 @@ fuzzy logic calibration, an optional LLM judge, and an online feedback loop.
 ```
 Input Text
     |
-    +---> BERT Classifier (10%)      --+
+    +---> BERT Classifier (30%)      --+
     |     bert-base-uncased             |
     |     PyTorch                       |
     |                                   |
-    +---> TF-IDF DNN (80%)           --+--> Weighted Ensemble
+    +---> TF-IDF DNN (40%)           --+--> Weighted Ensemble
     |     word + char n-grams           |    --> Fuzzy Logic
     |     TensorFlow/Keras              |    --> LLM Judge (optional)
     |                                   |    --> Final Verdict
-    +---> Naive Bayes (10%)          --+
+    +---> Naive Bayes (30%)          --+
           ComplementNB
           scikit-learn
 ```
@@ -36,7 +36,7 @@ Input Text
 - Features: 50k word n-grams + 30k char n-grams = 80k total
 - Architecture: Dense(256, relu) -> Dropout(0.4) -> Dense(128, relu) -> Dense(2, softmax)
 - Vectorizer: saved as models/tfidf_vectorizer.joblib
-- Val accuracy: 0.656
+- Val accuracy: 0.642
 
 ### Naive Bayes (src/models/naive_bayes_model.py)
 - Type: ComplementNB with online learning (partial_fit)
@@ -44,9 +44,9 @@ Input Text
 - Val accuracy: 0.634
 
 ### Ensemble (src/models/ensemble_detector.py)
-- Weights: BERT=0.1, TF-IDF=0.8, NB=0.1
+- Weights: BERT=0.3, TF-IDF=0.4, NB=0.3
 - Weights optimised via grid search on 10,000 val samples
-- Ensemble accuracy: 0.682
+- Ensemble accuracy: 0.684
 
 ### Fuzzy Logic (src/fuzzy/)
 - Engine: Manual Mamdani inference (Python 3.12 compatible)
